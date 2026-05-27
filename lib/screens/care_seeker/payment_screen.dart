@@ -39,14 +39,16 @@ class PaymentScreen extends StatefulWidget {
   State<PaymentScreen> createState() => _PaymentScreenState();
 }
 
-class _PaymentScreenState extends State<PaymentScreen> {
+class _PaymentScreenState extends State<PaymentScreen>
+    with WidgetsBindingObserver {
   String? _method;
   bool _processing = false;
 
+  // Flipped to true after payment URL is launched.
+  // When app resumes, we know the user returned from Cashfree.
+  bool _paymentLaunched = false;
+
   bool get isDark => themeNotifier.value == ThemeMode.dark;
-  void _onThemeChange() {
-    if (mounted) setState(() {});
-  }
 
   String _to24Hour(String time) {
     final dt = DateFormat("h:mm a")
@@ -58,16 +60,31 @@ class _PaymentScreenState extends State<PaymentScreen> {
   void initState() {
     super.initState();
     themeNotifier.addListener(_onThemeChange);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
     themeNotifier.removeListener(_onThemeChange);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
+  void _onThemeChange() {
+    if (mounted) setState(() {});
+  }
+
+  /// Fires when user returns to the app from the external browser.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _paymentLaunched) {
+      _paymentLaunched = false;
+      _onPaymentReturned();
+    }
+  }
+
   /* =====================================================
-     PLACE ORDER
+     PLACE ORDER  — called ONLY after payment
   ===================================================== */
 
   Future<Map<String, dynamic>?> _placeOrder({
@@ -96,18 +113,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     "service_id": e["service_id"] ?? e["id"],
                     "quantity": e["quantity"] ?? 1,
                     "price": e["price"] ?? 0,
-                    "category":
-                        (e["category"] ?? "").toString().trim(),
+                    "category": (e["category"] ?? "").toString().trim(),
                   })
               .toList(),
         }),
       );
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data["success"] != true) return null;
-      if (data["orders"] is List &&
-          (data["orders"] as List).isNotEmpty) {
-        final first =
-            (data["orders"] as List).first as Map<String, dynamic>;
+      if (data["orders"] is List && (data["orders"] as List).isNotEmpty) {
+        final first = (data["orders"] as List).first as Map<String, dynamic>;
         data["order_id"] ??= first["order_id"] ?? first["id"];
         data["order_code"] ??= first["order_code"];
       }
@@ -136,8 +150,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     if (_processing) return;
     setState(() => _processing = true);
 
-    final apiFuture =
-        _placeOrder(method: "COD").then((result) async {
+    final apiFuture = _placeOrder(method: "COD").then((result) async {
       if (result == null) return null;
       final id = result["order_id"];
       if (id != null) {
@@ -173,7 +186,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   /* =====================================================
-     CASHFREE HOSTED CHECKOUT FLOW
+     CASHFREE — STEP 1: create session & open payment
   ===================================================== */
 
   Future<void> _startCashfree() async {
@@ -181,17 +194,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     setState(() => _processing = true);
 
     try {
-      // Step 1 — place order on backend
-      final orderResult = await _placeOrder(method: "ONLINE");
-
-      if (orderResult == null) {
-        _snack("Order creation failed");
-        setState(() => _processing = false);
-        return;
-      }
-
-      // Step 2 — create Cashfree payment session
-      final paymentRes = await http.post(
+      // Only create the Cashfree payment session — NO order placed yet
+      final res = await http.post(
         Uri.parse(Api.createOrder),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
@@ -203,51 +207,73 @@ class _PaymentScreenState extends State<PaymentScreen> {
         }),
       );
 
-      final paymentData = jsonDecode(paymentRes.body);
+      final data = jsonDecode(res.body);
 
-      if (paymentData["success"] != true) {
-        _snack("Payment initialization failed");
+      if (data["success"] != true) {
+        _snack("Payment initialization failed. Please try again.");
         setState(() => _processing = false);
         return;
       }
 
-      // Step 3 — open Cashfree hosted checkout in browser
-      final sessionId = paymentData["payment_session_id"];
-      final paymentUrl =
-          "https://payments.cashfree.com/order/#$sessionId";
+      final String? paymentLink = data["payment_link"];
+
+      if (paymentLink == null || paymentLink.isEmpty) {
+        _snack("Payment link unavailable. Please try again.");
+        setState(() => _processing = false);
+        return;
+      }
+
+      // Mark launched — app resume will trigger order placement
+      _paymentLaunched = true;
 
       await launchUrl(
-        Uri.parse(paymentUrl),
+        Uri.parse(paymentLink),
         mode: LaunchMode.externalApplication,
       );
 
-      // Step 4 — clear cart and navigate to processing screen
-      await _clearCart();
+      // Spinner stays visible while user is on Cashfree page
 
-      if (!mounted) return;
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ProcessingScreen(
-            isCOD: false,
-            apiFuture: Future.value(orderResult),
-            userId: widget.userId,
-            subtotal: widget.subtotal,
-            serviceCharge: widget.serviceCharge,
-            discount: widget.discount,
-            total: widget.total,
-          ),
-        ),
-      );
     } catch (e) {
-      debugPrint(e.toString());
-      _snack("Payment failed");
-    } finally {
-      if (mounted) {
-        setState(() => _processing = false);
-      }
+      debugPrint("Cashfree error: $e");
+      _snack("Failed to open payment page. Please try again.");
+      _paymentLaunched = false;
+      if (mounted) setState(() => _processing = false);
     }
+  }
+
+  /* =====================================================
+     CASHFREE — STEP 2: user returned from browser
+  ===================================================== */
+
+  Future<void> _onPaymentReturned() async {
+    if (!mounted) return;
+    setState(() => _processing = true);
+
+    // NOW place the order — payment was already completed by user
+    final apiFuture = _placeOrder(method: "ONLINE").then((result) async {
+      if (result == null) return null;
+      await _clearCart();
+      return result;
+    });
+
+    if (!mounted) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProcessingScreen(
+          isCOD: false,
+          apiFuture: apiFuture,
+          userId: widget.userId,
+          subtotal: widget.subtotal,
+          serviceCharge: widget.serviceCharge,
+          discount: widget.discount,
+          total: widget.total,
+        ),
+      ),
+    );
+
+    if (mounted) setState(() => _processing = false);
   }
 
   /* =====================================================
@@ -306,8 +332,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
               const BorderRadius.vertical(bottom: Radius.circular(28)),
         ),
         child: Row(children: [
-          _circleBtn(
-              Icons.arrow_back_ios_new, () => Navigator.pop(context)),
+          _circleBtn(Icons.arrow_back_ios_new, () => Navigator.pop(context)),
           const SizedBox(width: 12),
           const Expanded(
             child: Text("Checkout",
@@ -317,8 +342,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     fontWeight: FontWeight.bold)),
           ),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.2),
               borderRadius: BorderRadius.circular(20),
@@ -336,15 +360,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
         ]),
       );
 
-  Widget _circleBtn(IconData icon, VoidCallback onTap) =>
-      GestureDetector(
+  Widget _circleBtn(IconData icon, VoidCallback onTap) => GestureDetector(
         onTap: onTap,
         child: Container(
           width: 38,
           height: 38,
           decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              shape: BoxShape.circle),
+              color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
           child: Icon(icon, color: Colors.white, size: 16),
         ),
       );
@@ -359,8 +381,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E293B) : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border:
-              isDark ? Border.all(color: Colors.grey.shade800) : null,
+          border: isDark ? Border.all(color: Colors.grey.shade800) : null,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
@@ -372,8 +393,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         child: child,
       );
 
-  Widget _sectionTitle(String title, IconData icon) =>
-      Row(children: [
+  Widget _sectionTitle(String title, IconData icon) => Row(children: [
         Icon(icon, size: 18, color: AppColors.primary),
         const SizedBox(width: 8),
         Text(title,
@@ -416,9 +436,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
-                          color: isDark
-                              ? Colors.white
-                              : Colors.black87)),
+                          color:
+                              isDark ? Colors.white : Colors.black87)),
                 ]),
           ),
         ]),
@@ -432,41 +451,33 @@ class _PaymentScreenState extends State<PaymentScreen> {
         child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _sectionTitle(
-                  "Service Schedule", Icons.schedule_rounded),
-              const SizedBox(height: 14),
-              Row(children: [
-                Icon(Icons.calendar_today,
-                    size: 16, color: AppColors.primary),
-                const SizedBox(width: 8),
-                Text(widget.date,
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: isDark
-                            ? Colors.white
-                            : Colors.black87)),
-              ]),
-              const SizedBox(height: 10),
-              Row(children: [
-                Icon(Icons.access_time,
-                    size: 16, color: AppColors.primary),
-                const SizedBox(width: 8),
-                Text(widget.slot,
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary)),
-              ]),
-              const SizedBox(height: 12),
-              Text(
-                  "All selected services will be provided at this time slot",
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: isDark
-                          ? Colors.grey.shade400
-                          : Colors.grey)),
-            ]),
+          _sectionTitle("Service Schedule", Icons.schedule_rounded),
+          const SizedBox(height: 14),
+          Row(children: [
+            Icon(Icons.calendar_today, size: 16, color: AppColors.primary),
+            const SizedBox(width: 8),
+            Text(widget.date,
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : Colors.black87)),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Icon(Icons.access_time, size: 16, color: AppColors.primary),
+            const SizedBox(width: 8),
+            Text(widget.slot,
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary)),
+          ]),
+          const SizedBox(height: 12),
+          Text("All selected services will be provided at this time slot",
+              style: TextStyle(
+                  fontSize: 12,
+                  color: isDark ? Colors.grey.shade400 : Colors.grey)),
+        ]),
       );
 
   /* =====================================================
@@ -492,85 +503,71 @@ class _PaymentScreenState extends State<PaymentScreen> {
       child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionTitle(
-                "Booking Summary", Icons.receipt_long_rounded),
-            const SizedBox(height: 14),
-            ...grouped.entries.map((e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Row(children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                          color:
-                              AppColors.primary.withOpacity(0.08),
-                          borderRadius:
-                              BorderRadius.circular(10)),
-                      child: Icon(
-                          Icons.medical_services_outlined,
-                          color: AppColors.primary,
-                          size: 18),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        e.value["qty"] > 1
-                            ? "${e.key} ×${e.value["qty"]}"
-                            : e.key,
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: isDark
-                                ? Colors.white
-                                : Colors.black87),
-                      ),
-                    ),
-                    Text(
-                      "₹${((e.value["price"] as double) * (e.value["qty"] as int)).toStringAsFixed(0)}",
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary),
-                    ),
-                  ]),
-                )),
-            Divider(
-                thickness: 0.8,
-                color: isDark
-                    ? Colors.grey.shade700
-                    : Colors.grey.shade200),
-            const SizedBox(height: 8),
-            _billRow("Subtotal",
-                "₹${widget.subtotal.toStringAsFixed(2)}"),
-            if (widget.serviceCharge > 0) ...[
-              const SizedBox(height: 6),
-              _billRow(
-                  "Service Charge",
-                  "+₹${widget.serviceCharge.toStringAsFixed(2)}",
-                  valueColor: isDark
-                      ? Colors.orange.shade300
-                      : Colors.orange.shade700),
-            ],
-            if (widget.discount > 0) ...[
-              const SizedBox(height: 6),
-              _billRow(
-                  widget.couponCode.isNotEmpty
-                      ? "Coupon (${widget.couponCode})"
-                      : "Discount",
-                  "−₹${widget.discount.toStringAsFixed(2)}",
-                  valueColor: Colors.green),
-            ],
-            const SizedBox(height: 10),
-            Divider(
-                thickness: 0.8,
-                color: isDark
-                    ? Colors.grey.shade700
-                    : Colors.grey.shade200),
-            const SizedBox(height: 8),
-            _billRow("Total Payable",
-                "₹${widget.total.toStringAsFixed(2)}",
-                isBold: true),
-          ]),
+        _sectionTitle("Booking Summary", Icons.receipt_long_rounded),
+        const SizedBox(height: 14),
+        ...grouped.entries.map((e) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Icon(Icons.medical_services_outlined,
+                      color: AppColors.primary, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    e.value["qty"] > 1
+                        ? "${e.key} ×${e.value["qty"]}"
+                        : e.key,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white : Colors.black87),
+                  ),
+                ),
+                Text(
+                  "₹${((e.value["price"] as double) * (e.value["qty"] as int)).toStringAsFixed(0)}",
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary),
+                ),
+              ]),
+            )),
+        Divider(
+            thickness: 0.8,
+            color: isDark ? Colors.grey.shade700 : Colors.grey.shade200),
+        const SizedBox(height: 8),
+        _billRow("Subtotal", "₹${widget.subtotal.toStringAsFixed(2)}"),
+        if (widget.serviceCharge > 0) ...[
+          const SizedBox(height: 6),
+          _billRow(
+              "Service Charge",
+              "+₹${widget.serviceCharge.toStringAsFixed(2)}",
+              valueColor:
+                  isDark ? Colors.orange.shade300 : Colors.orange.shade700),
+        ],
+        if (widget.discount > 0) ...[
+          const SizedBox(height: 6),
+          _billRow(
+              widget.couponCode.isNotEmpty
+                  ? "Coupon (${widget.couponCode})"
+                  : "Discount",
+              "−₹${widget.discount.toStringAsFixed(2)}",
+              valueColor: Colors.green),
+        ],
+        const SizedBox(height: 10),
+        Divider(
+            thickness: 0.8,
+            color: isDark ? Colors.grey.shade700 : Colors.grey.shade200),
+        const SizedBox(height: 8),
+        _billRow("Total Payable", "₹${widget.total.toStringAsFixed(2)}",
+            isBold: true),
+      ]),
     );
   }
 
@@ -580,22 +577,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
         Text(label,
             style: TextStyle(
                 fontSize: 14,
-                color:
-                    isDark ? Colors.grey.shade300 : Colors.black54,
+                color: isDark ? Colors.grey.shade300 : Colors.black54,
                 fontWeight:
                     isBold ? FontWeight.bold : FontWeight.normal)),
         const Spacer(),
         Text(value,
             style: TextStyle(
                 fontSize: isBold ? 16 : 14,
-                fontWeight:
-                    isBold ? FontWeight.bold : FontWeight.w600,
+                fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
                 color: valueColor ??
                     (isBold
                         ? AppColors.primary
-                        : (isDark
-                            ? Colors.white
-                            : Colors.black87)))),
+                        : (isDark ? Colors.white : Colors.black87)))),
       ]);
 
   /* =====================================================
@@ -606,51 +599,50 @@ class _PaymentScreenState extends State<PaymentScreen> {
         child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _sectionTitle(
-                  "Payment Method", Icons.payment_rounded),
-              const SizedBox(height: 6),
-              if (_method == null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text("Select how you'd like to pay",
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: isDark
-                              ? Colors.grey.shade500
-                              : Colors.grey.shade400)),
-                ),
-              const SizedBox(height: 8),
-              _payOption(
-                value: "COD",
-                leading: Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFE8F5E9),
-                      borderRadius: BorderRadius.circular(12)),
-                  child: const Icon(Icons.money_rounded,
-                      color: Color(0xFF2E7D32), size: 22),
-                ),
-                title: "Cash after Service",
-                subtitle: "Pay in cash when done",
-              ),
-              const SizedBox(height: 10),
-              _payOption(
-                value: "ONLINE",
-                leading: Container(
-                  width: 42,
-                  height: 42,
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFE3F2FD),
-                      borderRadius: BorderRadius.circular(12)),
-                  child: Image.asset('assets/cashfree.png',
-                      fit: BoxFit.contain),
-                ),
-                title: "Cards / UPI / Wallets",
-                subtitle: "Secure payment via Cashfree",
-              ),
-            ]),
+          _sectionTitle("Payment Method", Icons.payment_rounded),
+          const SizedBox(height: 6),
+          if (_method == null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text("Select how you'd like to pay",
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: isDark
+                          ? Colors.grey.shade500
+                          : Colors.grey.shade400)),
+            ),
+          const SizedBox(height: 8),
+          _payOption(
+            value: "COD",
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.money_rounded,
+                  color: Color(0xFF2E7D32), size: 22),
+            ),
+            title: "Cash after Service",
+            subtitle: "Pay in cash when done",
+          ),
+          const SizedBox(height: 10),
+          _payOption(
+            value: "ONLINE",
+            leading: Container(
+              width: 42,
+              height: 42,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFE3F2FD),
+                  borderRadius: BorderRadius.circular(12)),
+              child:
+                  Image.asset('assets/cashfree.png', fit: BoxFit.contain),
+            ),
+            title: "Cards / UPI / Wallets",
+            subtitle: "Secure payment via Cashfree",
+          ),
+        ]),
       );
 
   Widget _payOption({
@@ -664,14 +656,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
       onTap: () => setState(() => _method = value),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(
-            horizontal: 14, vertical: 13),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         decoration: BoxDecoration(
           color: sel
               ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.05)
-              : (isDark
-                  ? const Color(0xFF0F172A)
-                  : Colors.white),
+              : (isDark ? const Color(0xFF0F172A) : Colors.white),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: sel
@@ -689,23 +679,21 @@ class _PaymentScreenState extends State<PaymentScreen> {
             child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title,
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: sel
-                              ? AppColors.primary
-                              : (isDark
-                                  ? Colors.white
-                                  : Colors.black87))),
-                  const SizedBox(height: 2),
-                  Text(subtitle,
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: isDark
-                              ? Colors.grey.shade400
-                              : Colors.grey.shade500)),
-                ]),
+              Text(title,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: sel
+                          ? AppColors.primary
+                          : (isDark ? Colors.white : Colors.black87))),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: isDark
+                          ? Colors.grey.shade400
+                          : Colors.grey.shade500)),
+            ]),
           ),
           Container(
             width: 22,
@@ -722,8 +710,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   width: 2),
             ),
             child: sel
-                ? const Icon(Icons.check,
-                    color: Colors.white, size: 13)
+                ? const Icon(Icons.check, color: Colors.white, size: 13)
                 : null,
           ),
         ]),
@@ -742,13 +729,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
           borderRadius:
               const BorderRadius.vertical(top: Radius.circular(24)),
           border: isDark
-              ? Border(
-                  top: BorderSide(color: Colors.grey.shade800))
+              ? Border(top: BorderSide(color: Colors.grey.shade800))
               : null,
           boxShadow: [
             BoxShadow(
-              color:
-                  Colors.black.withOpacity(isDark ? 0.4 : 0.08),
+              color: Colors.black.withOpacity(isDark ? 0.4 : 0.08),
               blurRadius: 16,
               offset: const Offset(0, -4),
             )
@@ -759,28 +744,25 @@ class _PaymentScreenState extends State<PaymentScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (widget.discount > 0 ||
-                    widget.serviceCharge > 0)
-                  Text(
-                      "₹${widget.subtotal.toStringAsFixed(0)}",
-                      style: const TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey,
-                          decoration: TextDecoration.lineThrough,
-                          decorationColor: Colors.grey)),
-                Text("₹${widget.total.toStringAsFixed(0)}",
-                    style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary)),
-                if (widget.discount > 0)
-                  Text(
-                      "Saved ₹${widget.discount.toStringAsFixed(0)}",
-                      style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.green,
-                          fontWeight: FontWeight.w600)),
-              ]),
+            if (widget.discount > 0 || widget.serviceCharge > 0)
+              Text("₹${widget.subtotal.toStringAsFixed(0)}",
+                  style: const TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey,
+                      decoration: TextDecoration.lineThrough,
+                      decorationColor: Colors.grey)),
+            Text("₹${widget.total.toStringAsFixed(0)}",
+                style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary)),
+            if (widget.discount > 0)
+              Text("Saved ₹${widget.discount.toStringAsFixed(0)}",
+                  style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.green,
+                      fontWeight: FontWeight.w600)),
+          ]),
           const SizedBox(width: 16),
           Expanded(
             child: GestureDetector(
@@ -799,8 +781,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   boxShadow: _method != null
                       ? [
                           BoxShadow(
-                              color: AppColors.primary
-                                  .withOpacity(0.35),
+                              color: AppColors.primary.withOpacity(0.35),
                               blurRadius: 12,
                               offset: const Offset(0, 4))
                         ]
@@ -812,17 +793,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           width: 22,
                           height: 22,
                           child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2))
+                              color: Colors.white, strokeWidth: 2))
                       : Row(
-                          mainAxisAlignment:
-                              MainAxisAlignment.center,
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               _method == "ONLINE"
                                   ? Icons.flash_on_rounded
-                                  : Icons
-                                      .check_circle_outline_rounded,
+                                  : Icons.check_circle_outline_rounded,
                               color: Colors.white,
                               size: 20,
                             ),
