@@ -6,14 +6,15 @@ const transporter = require("../config/mailer");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
 // ── Cashfree config ──────────────────────────────────────────────────────────
-const IS_PROD = process.env.NODE_ENV === "production";
-const CF_BASE = IS_PROD
-  ? "https://api.cashfree.com/pg"
-  : "https://sandbox.cashfree.com/pg";
+// Respects CASHFREE_ENV=SANDBOX|PRODUCTION (preferred over NODE_ENV)
+const IS_SANDBOX = (process.env.CASHFREE_ENV || "SANDBOX").toUpperCase() !== "PRODUCTION";
+const CF_BASE = IS_SANDBOX
+  ? "https://sandbox.cashfree.com/pg"
+  : "https://api.cashfree.com/pg";
 
 // LOG credentials on startup so you can see if they're missing
 console.log("🔑 Cashfree ENV check:", {
-  env: process.env.NODE_ENV,
+  CASHFREE_ENV: process.env.CASHFREE_ENV || "(not set → defaulting to SANDBOX)",
   base: CF_BASE,
   app_id: process.env.CASHFREE_APP_ID
     ? `${process.env.CASHFREE_APP_ID.slice(0, 6)}…` : "❌ MISSING",
