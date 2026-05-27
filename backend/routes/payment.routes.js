@@ -12,6 +12,11 @@ const CF_BASE = IS_SANDBOX
   ? "https://sandbox.cashfree.com/pg"
   : "https://api.cashfree.com/pg";
 
+// Hosted checkout page — different domain for sandbox vs production
+const CF_CHECKOUT_BASE = IS_SANDBOX
+  ? "https://sandbox.cashfree.com/order"   // sandbox hosted checkout
+  : "https://payments.cashfree.com/order"; // production hosted checkout
+
 // LOG credentials on startup so you can see if they're missing
 console.log("🔑 Cashfree ENV check:", {
   CASHFREE_ENV: process.env.CASHFREE_ENV || "(not set → defaulting to SANDBOX)",
@@ -76,7 +81,11 @@ router.post("/create-order", async (req, res) => {
       return err(res, "No payment session returned by gateway");
     }
 
-    return ok(res, "Order created", { payment_session_id, order_id });
+    // Build the correct hosted checkout URL (sandbox vs production differ)
+    const payment_url = `${CF_CHECKOUT_BASE}/#${payment_session_id}`;
+    console.log("🔗 Checkout URL:", payment_url);
+
+    return ok(res, "Order created", { payment_session_id, order_id, payment_url });
   } catch (e) {
     const cfErr = e.response?.data;
     console.error("❌ CREATE ORDER ERROR:", cfErr || e.message);
