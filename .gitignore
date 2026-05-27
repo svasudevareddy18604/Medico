@@ -1,0 +1,29 @@
+# Node.js / Backend
+node_modules/
+.env
+.env.*
+logs/
+*.log
+
+# Build / Output
+dist/
+build/
+coverage/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Flutter (keep only if you actually use Flutter frontend)
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/node_modules/ 
+.env 
+backend/uploads/ 
+*.sql 
+ca.pem 

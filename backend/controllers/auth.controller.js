@@ -1,0 +1,237 @@
+const db = require("../config/db");
+const sendEmail = require("../config/mailer");
+const bcrypt = require("bcrypt");
+
+/* ─── HELPERS ─────────────────────────────────────────────────────────────── */
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000);
+
+/* ─── EMAIL BASE ──────────────────────────────────────────────────────────── */
+const emailBase = (content) => `
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#f0f2f5;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:520px;margin:40px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.07)}
+  .head{background:linear-gradient(135deg,#1B7F6E 0%,#25A98F 100%);padding:28px 32px;text-align:center}
+  .head h1{color:#fff;font-size:17px;font-weight:600;letter-spacing:.3px;margin:0}
+  .head p{color:rgba(255,255,255,.72);font-size:11.5px;margin-top:5px;letter-spacing:.2px}
+  .body{padding:28px 32px}
+  .note{font-size:13px;color:#4b5563;line-height:1.65;margin-bottom:6px}
+  .card{background:#f8fffe;border:1px solid #d4f0ea;border-radius:10px;padding:18px 20px;margin:18px 0}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e8f6f2;font-size:12.5px}
+  .row:last-child{border-bottom:none}
+  .row .l{color:#6b7280;font-weight:500}.row .v{color:#111827;font-weight:600;text-align:right}
+  .otp-box{background:#f0fdf9;border:1.5px dashed #25A98F;border-radius:10px;padding:22px;margin:20px 0;text-align:center}
+  .otp-code{font-size:34px;font-weight:700;letter-spacing:10px;color:#1B7F6E;font-family:'Courier New',monospace}
+  .otp-hint{font-size:11.5px;color:#6b7280;margin-top:8px}
+  .badge{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11px;font-weight:700}
+  .green{background:#e6f5f0;color:#1B7F6E}.red{background:#fde8e8;color:#c0392b}
+  .divider{height:1px;background:#f3f4f6;margin:18px 0}
+  .footer{background:#f9fafb;padding:18px 32px;text-align:center;border-top:1px solid #eeeeee}
+  .footer p{color:#9ca3af;font-size:11px;margin:3px 0;line-height:1.6}
+  .footer a{color:#1B7F6E;text-decoration:none;font-weight:600}
+  .warn{background:#fffbeb;border-left:3px solid #f59e0b;border-radius:0 6px 6px 0;padding:10px 14px;font-size:12px;color:#92400e;margin-top:14px;line-height:1.6}
+</style></head><body><div class="wrap">${content}</div></body></html>`;
+
+const footer = `<div class="footer">
+  <p>Questions? <a href="mailto:support@medico.com">support@medico.com</a></p>
+  <p>© ${new Date().getFullYear()} Medico. All rights reserved. · <a href="#">Privacy Policy</a></p>
+</div>`;
+
+/* ─── OTP EMAIL TEMPLATE ──────────────────────────────────────────────────── */
+const otpEmail = ({ otp, email }) => emailBase(`
+  <div class="head"><h1>Password Reset Request</h1><p>Action required — verify your identity</p></div>
+  <div class="body">
+    <p class="note">We received a request to reset the password for <strong>${email}</strong>.</p>
+    <p class="note" style="margin-top:6px">Use the one-time code below to proceed:</p>
+    <div class="otp-box">
+      <div class="otp-code">${otp}</div>
+      <p class="otp-hint">Valid for <strong>5 minutes</strong> · Do not share this code</p>
+    </div>
+    <div class="warn">⚠️ If you didn't request this, you can safely ignore this email. Your password will not change.</div>
+  </div>${footer}`);
+
+/* ─── SEND OTP ────────────────────────────────────────────────────────────── */
+exports.sendOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: "Email required" });
+
+    const otp    = generateOTP();
+    const expiry = new Date(Date.now() + 5 * 60000);
+
+    await db.query(
+      "INSERT INTO otp_codes (email, otp, expires_at) VALUES (?, ?, ?)",
+      [email, otp, expiry]
+    );
+
+    await sendEmail({
+      to: email,
+      subject: "Your Medico Password Reset OTP",
+      html: otpEmail({ otp, email })
+    });
+
+    res.json({ success: true, message: "OTP sent" });
+
+  } catch (err) {
+    console.error("SEND OTP ERROR:", err);
+    res.status(500).json({ success: false, message: "OTP sending failed" });
+  }
+};
+
+/* ─── VERIFY OTP ──────────────────────────────────────────────────────────── */
+exports.verifyOTP = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    const [rows] = await db.query(
+      "SELECT * FROM otp_codes WHERE email = ? AND otp = ? AND expires_at > NOW()",
+      [email, otp]
+    );
+
+    if (rows.length === 0)
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+
+    await db.query("DELETE FROM otp_codes WHERE email = ?", [email]);
+
+    res.json({ success: true, message: "OTP verified" });
+
+  } catch (err) {
+    console.error("OTP VERIFY ERROR:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+};
+
+/* ─── RESET PASSWORD ──────────────────────────────────────────────────────── */
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword)
+      return res.status(400).json({ success: false, message: "Email, OTP and new password required" });
+
+    const [rows] = await db.query(
+      "SELECT * FROM otp_codes WHERE email = ? AND otp = ? AND expires_at > NOW()",
+      [email, otp]
+    );
+
+    if (rows.length === 0)
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    const [updateResult] = await db.query(
+      "UPDATE users SET password = ? WHERE email = ?",
+      [hashedPassword, email]
+    );
+
+    if (updateResult.affectedRows === 0)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    await db.query("DELETE FROM otp_codes WHERE email = ?", [email]);
+
+    res.json({ success: true, message: "Password reset successful" });
+
+  } catch (err) {
+    console.error("RESET PASSWORD ERROR:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/* ─── REGISTER ────────────────────────────────────────────────────────────── */
+exports.register = async (req, res) => {
+  try {
+    const { first_name, last_name, mobile, email, password, role } = req.body;
+
+    if (!role || !email || !password)
+      return res.status(400).json({ success: false, message: "Required fields missing" });
+
+    const hash = await bcrypt.hash(password, 10);
+
+    await db.query(
+      `INSERT INTO users
+       (first_name, last_name, mobile, email, password, role, verified, profile_completed, approval_status, is_blocked)
+       VALUES (?, ?, ?, ?, ?, ?, true, 0, 'pending', 0)`,
+      [first_name, last_name, mobile, email, hash, role]
+    );
+
+    res.json({ success: true, message: "Account created" });
+
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
+    if (err.code === "ER_DUP_ENTRY")
+      return res.status(400).json({ success: false, message: "User already exists" });
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+};
+
+/* ─── LOGIN ───────────────────────────────────────────────────────────────── */
+exports.login = async (req, res) => {
+  try {
+    const { email, password, fcm_token } = req.body;
+
+    if (!email || !password)
+      return res.status(400).json({ success: false, message: "Email and password required" });
+
+    const [rows] = await db.query(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.password,
+              u.profile_completed, u.approval_status, u.is_blocked,
+              cp.caregiver_type,
+              (SELECT COUNT(*) FROM caretaker_documents cd WHERE cd.user_id = u.id) AS documents_uploaded
+       FROM users u
+       LEFT JOIN caretaker_profiles cp ON cp.user_id = u.id
+       WHERE u.email = ?`,
+      [email]
+    );
+
+    if (rows.length === 0)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    const user = rows[0];
+
+    if (!(await bcrypt.compare(password, user.password)))
+      return res.status(401).json({ success: false, message: "Wrong password" });
+
+    if (user.is_blocked === 1)
+      return res.status(403).json({ success: false, message: "Account blocked, Please Contact Our Support team for Reason." });
+
+    if (fcm_token)
+      await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcm_token, user.id]);
+
+    res.json({
+      success: true,
+      id: user.id,
+      role: user.role,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      profile_completed: user.profile_completed,
+      documents_uploaded: user.documents_uploaded > 0 ? 1 : 0,
+      approval_status: user.approval_status,
+      caregiver_type: user.caregiver_type
+    });
+
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+};
+
+/* ─── GET USER PROFILE ────────────────────────────────────────────────────── */
+exports.getUserProfile = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT first_name, last_name, email FROM users WHERE id = ?",
+      [req.params.id]
+    );
+
+    if (rows.length === 0)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    res.json({ success: true, data: rows[0] });
+
+  } catch (err) {
+    console.error("PROFILE ERROR:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+};

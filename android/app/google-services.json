@@ -1,0 +1,154 @@
+{
+  "project_info": {
+    "project_number": "570616690338",
+    "project_id": "delicute-c1f57",
+    "storage_bucket": "delicute-c1f57.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:570616690338:android:8b0f71c6233adaeaef49fb",
+        "android_client_info": {
+          "package_name": "com.example.food"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCT4QcL6JaLZo0NIV3H9SEHFvJJtZwnsiA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "570616690338-ln7p6e9v9t3heobsb0ks2r2tvpmlfi8c.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vasudevareddy.delicute"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:570616690338:android:10f8a0600cc77218ef49fb",
+        "android_client_info": {
+          "package_name": "com.example.medico"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCT4QcL6JaLZo0NIV3H9SEHFvJJtZwnsiA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "570616690338-ln7p6e9v9t3heobsb0ks2r2tvpmlfi8c.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vasudevareddy.delicute"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:570616690338:android:730894dde0d12f91ef49fb",
+        "android_client_info": {
+          "package_name": "com.vasudevareddy.delicute"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCT4QcL6JaLZo0NIV3H9SEHFvJJtZwnsiA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "570616690338-ln7p6e9v9t3heobsb0ks2r2tvpmlfi8c.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vasudevareddy.delicute"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:570616690338:android:f8048c28e17d5b74ef49fb",
+        "android_client_info": {
+          "package_name": "com.vasudevareddy.delicutee"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCT4QcL6JaLZo0NIV3H9SEHFvJJtZwnsiA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "570616690338-34uf8lm1bo0l8db1t6l479enqm3m024r.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "570616690338-ln7p6e9v9t3heobsb0ks2r2tvpmlfi8c.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vasudevareddy.delicute"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

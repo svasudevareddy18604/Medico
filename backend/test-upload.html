@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Upload Test</title>
+</head>
+<body>
+
+  <h2>Medical Document Upload</h2>
+
+  <input type="file" id="fileInput" />
+
+  <button onclick="uploadFile()">
+    Upload
+  </button>
+
+  <script>
+    async function uploadFile() {
+      const fileInput =
+        document.getElementById("fileInput");
+
+      const formData = new FormData();
+
+      formData.append(
+        "documents",
+        fileInput.files[0]
+      );
+
+      formData.append("user_id", 71);
+      formData.append("service_id", 1);
+      formData.append(
+        "document_key",
+        "prescription"
+      );
+
+      const response = await fetch(
+        "http://localhost:3000/api/documents/upload",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+
+      console.log(data);
+
+      alert(JSON.stringify(data));
+    }
+  </script>
+
+</body>
+</html>
