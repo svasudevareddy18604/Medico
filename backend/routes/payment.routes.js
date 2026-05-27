@@ -60,8 +60,9 @@ router.post("/create-order", async (req, res) => {
       customer_phone: customer_phone || "9999999999",
     },
     order_meta: {
-      return_url: "https://medico-1-qk02.onrender.com",
-    },
+  return_url: "medico://payment/return",
+  notify_url: "https://medico-1-qk02.onrender.com/api/payment/webhook",
+},
   };
 
   console.log("📤 Cashfree request →", CF_BASE, JSON.stringify(payload));
