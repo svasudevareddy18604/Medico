@@ -78,7 +78,10 @@ router.post("/create-order", async (req, res) => {
     }
 
     // Build the correct hosted checkout URL (sandbox vs production differ)
-    const payment_url = `${CF_CHECKOUT_BASE}/#${payment_session_id}`;
+    const cleanSessionId = payment_session_id.replace(/paymentpayment$/, "").replace(/payment$/, "");
+const payment_url = `${CF_CHECKOUT_BASE}/#${cleanSessionId}`;
+
+return ok(res, "Order created", { payment_session_id: cleanSessionId, order_id, payment_url });
     console.log("🔗 Checkout URL:", payment_url);
 
     return ok(res, "Order created", { payment_session_id, order_id, payment_url });
