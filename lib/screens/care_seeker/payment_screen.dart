@@ -212,19 +212,19 @@ class _PaymentScreenState extends State<PaymentScreen>
         return;
       }
 
-      final String? sessionId = data["payment_session_id"] as String?;
-      final String? cfOrderId  = data["order_id"] as String?;
-      _log("Session: $sessionId  CF-OrderId: $cfOrderId");
+      // Backend returns the correct URL for sandbox vs production
+      final String? paymentUrl = data["payment_url"] as String?;
+final String? cfOrderId  = data["order_id"] as String?;
+_log("CF-OrderId: $cfOrderId  URL: $paymentUrl");
 
-      if (sessionId == null || sessionId.isEmpty) {
-        _snack("Payment session unavailable. Please try again.");
-        setState(() => _processing = false);
-        return;
-      }
+if (paymentUrl == null || paymentUrl.isEmpty) {
+  _snack("Payment session unavailable. Please try again.");
+  setState(() => _processing = false);
+  return;
+}
 
-      _pendingCashfreeOrderId = cfOrderId;
-      final paymentUrl = "https://payments.cashfree.com/order/#$sessionId";
-      _log("Opening: $paymentUrl");
+_pendingCashfreeOrderId = cfOrderId;
+_log("Opening: $paymentUrl");
 
       final canLaunch = await canLaunchUrl(Uri.parse(paymentUrl));
       _log("canLaunchUrl: $canLaunch");

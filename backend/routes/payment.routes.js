@@ -13,9 +13,7 @@ const CF_BASE = IS_SANDBOX
   : "https://api.cashfree.com/pg";
 
 // Hosted checkout page — different domain for sandbox vs production
-const CF_CHECKOUT_BASE = IS_SANDBOX
-  ? "https://sandbox.cashfree.com/order"   // sandbox hosted checkout
-  : "https://payments.cashfree.com/order"; // production hosted checkout
+const CF_CHECKOUT_BASE = "https://payments.cashfree.com/order"; // production hosted checkout
 
 // LOG credentials on startup so you can see if they're missing
 console.log("🔑 Cashfree ENV check:", {
