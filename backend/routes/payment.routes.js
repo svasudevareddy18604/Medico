@@ -30,6 +30,10 @@ const sendResponse = (res, success, message, data = {}) =>
 
 /* =====================================================
    CREATE CASHFREE ORDER
+   Returns payment_session_id and order_id only.
+   NOTE: /pg/orders does NOT return a payment_link.
+   The frontend constructs the hosted checkout URL as:
+     https://payments.cashfree.com/order/#<payment_session_id>
 ===================================================== */
 
 router.post("/create-order", async (req, res) => {
@@ -63,11 +67,12 @@ router.post("/create-order", async (req, res) => {
       { headers: CF_HEADERS }
     );
 
-    const { payment_session_id, payment_link, order_id } = response.data;
+    // FIX: /pg/orders never returns payment_link — removed it entirely.
+    // Only extract payment_session_id and order_id.
+    const { payment_session_id, order_id } = response.data;
 
     return sendResponse(res, true, "Order created", {
       payment_session_id,
-      payment_link,
       order_id,
     });
   } catch (err) {
@@ -78,6 +83,9 @@ router.post("/create-order", async (req, res) => {
 
 /* =====================================================
    VERIFY CASHFREE PAYMENT
+   Called by the Flutter app after the user returns
+   from the Cashfree hosted checkout page.
+   Checks actual payment status before placing order.
 ===================================================== */
 
 router.post("/verify", async (req, res) => {
