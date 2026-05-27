@@ -56,7 +56,7 @@ router.post("/create-order", async (req, res) => {
       customer_phone: customer_phone || "9999999999",
     },
     order_meta: {
-      return_url: `https://medico-1-qk02.onrender.com/api/payment/return?order_id={order_id}`,
+      return_url: `https://medico-1-qk02.onrender.com/api/pg/return?order_id={order_id}`,
     },
   };
 
