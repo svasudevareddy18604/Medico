@@ -5,13 +5,14 @@ const db = require("../config/db");
 const transporter = require("../config/mailer");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
-// ── Cashfree config ──────────────────────────────────────────────────────────
 const IS_SANDBOX = (process.env.CASHFREE_ENV || "SANDBOX").toUpperCase() !== "PRODUCTION";
 const CF_BASE = IS_SANDBOX
   ? "https://sandbox.cashfree.com/pg"
   : "https://api.cashfree.com/pg";
 
-const CF_CHECKOUT_BASE = "https://payments.cashfree.com/order";
+const CF_CHECKOUT_BASE = IS_SANDBOX
+  ? "https://sandbox.cashfree.com/checkout"
+  : "https://payments.cashfree.com/order";
 
 console.log("🔑 Cashfree ENV check:", {
   CASHFREE_ENV: process.env.CASHFREE_ENV || "(not set → defaulting to SANDBOX)",
@@ -40,7 +41,7 @@ router.post("/create-order", async (req, res) => {
   if (!amount || Number(amount) <= 0) return err(res, "Invalid amount", 400);
 
   if (!process.env.CASHFREE_APP_ID || !process.env.CASHFREE_SECRET_KEY) {
-    console.error("❌ Cashfree credentials missing in environment variables!");
+    console.error("❌ Cashfree credentials missing!");
     return err(res, "Payment gateway not configured");
   }
 
@@ -55,9 +56,7 @@ router.post("/create-order", async (req, res) => {
       customer_email: customer_email || "user@medico.in",
       customer_phone: customer_phone || "9999999999",
     },
-    order_meta: {
-      return_url: `https://medico-1-qk02.onrender.com/api/pg/return?order_id={order_id}`,
-    },
+    order_meta: {},
   };
 
   console.log("📤 Cashfree request →", CF_BASE, JSON.stringify(payload));
@@ -72,21 +71,24 @@ router.post("/create-order", async (req, res) => {
     const { payment_session_id, order_id } = response.data;
 
     if (!payment_session_id) {
-      console.error("❌ No payment_session_id in Cashfree response:", response.data);
+      console.error("❌ No payment_session_id:", response.data);
       return err(res, "No payment session returned by gateway");
     }
 
-    const payment_url = `${CF_CHECKOUT_BASE}/#${payment_session_id}`;
+    // Strip Cashfree sandbox bug suffix
+    const cleanSession = payment_session_id
+      .replace(/paymentpayment$/, "")
+      .replace(/payment$/, "");
+
+    const payment_url = `${CF_CHECKOUT_BASE}/#${cleanSession}`;
     console.log("🔗 Checkout URL:", payment_url);
 
-    return ok(res, "Order created", { payment_session_id, order_id, payment_url });
+    return ok(res, "Order created", { payment_session_id: cleanSession, order_id, payment_url });
   } catch (e) {
     const cfErr = e.response?.data;
     console.error("❌ CREATE ORDER ERROR:", cfErr || e.message);
-    console.error("   Status:", e.response?.status);
-
     if (cfErr?.code === "authentication_error") {
-      console.error("👉 FIX: Check CASHFREE_APP_ID and CASHFREE_SECRET_KEY in your .env");
+      console.error("👉 Check CASHFREE_APP_ID and CASHFREE_SECRET_KEY");
     }
     return err(res, "Order creation failed");
   }
@@ -124,8 +126,8 @@ router.post("/verify", async (req, res) => {
     setImmediate(async () => {
       try {
         if (!order_id || order_id === 0) return;
-        const [[order]]   = await db.query("SELECT latitude, longitude FROM orders WHERE id=?", [order_id]);
-        const [[setting]] = await db.query("SELECT radius_km FROM settings LIMIT 1");
+        const [[order]]    = await db.query("SELECT latitude, longitude FROM orders WHERE id=?", [order_id]);
+        const [[setting]]  = await db.query("SELECT radius_km FROM settings LIMIT 1");
         const [caretakers] = await db.query(
           `SELECT u.fcm_token, u.email FROM users u
            JOIN caretaker_profiles cp ON cp.user_id = u.id
@@ -171,7 +173,7 @@ router.post("/cod-notification", async (req, res) => {
   }
 });
 
-// ── CONFIRM PAYMENT (caretaker marks COD paid) ────────────────────────────────
+// ── CONFIRM PAYMENT ───────────────────────────────────────────────────────────
 router.post("/confirm-payment", async (req, res) => {
   try {
     await db.query("UPDATE orders SET payment_status='PAID' WHERE id=?", [req.body.order_id]);
