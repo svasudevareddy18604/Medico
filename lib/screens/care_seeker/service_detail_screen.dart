@@ -8,7 +8,8 @@ import 'cart_screen.dart';
 class ServiceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> service;
   final int userId;
-  const ServiceDetailScreen({super.key, required this.service, required this.userId});
+  const ServiceDetailScreen(
+      {super.key, required this.service, required this.userId});
   @override
   State<ServiceDetailScreen> createState() => _ServiceDetailScreenState();
 }
@@ -37,7 +38,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   Future<void> checkCategoryAvailability() async {
     setState(() => isCheckingAvailability = true);
     try {
-      final url = Api.caretakerAvailability(widget.userId, widget.service["category"] ?? "");
+      final url = Api.caretakerAvailability(
+          widget.userId, widget.service["category"] ?? "");
       final res = await http.get(Uri.parse(url));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
@@ -56,7 +58,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   Future<void> loadRecommended() async {
     setState(() => isLoadingRecommended = true);
     try {
-      final res = await http.get(Uri.parse("${Api.baseUrl}/services/recommended"));
+      final res =
+          await http.get(Uri.parse("${Api.baseUrl}/services/recommended"));
       if (res.statusCode == 200) {
         final List data = jsonDecode(res.body)["services"] ?? [];
         setState(() => recommended = data
@@ -64,14 +67,17 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             .take(6)
             .toList());
       }
-    } catch (e) { debugPrint("Recommended error: $e"); }
+    } catch (e) {
+      debugPrint("Recommended error: $e");
+    }
     if (mounted) setState(() => isLoadingRecommended = false);
   }
 
   // ── CART COUNT ────────────────────────────────────────────────────────────
   Future<void> loadCartCount() async {
     try {
-      final res = await http.get(Uri.parse("${Api.baseUrl}/cart/${widget.userId}"));
+      final res =
+          await http.get(Uri.parse("${Api.baseUrl}/cart/${widget.userId}"));
       if (res.statusCode == 200) {
         final List data = jsonDecode(res.body);
         setState(() => cartCount =
@@ -95,10 +101,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
         Uri.parse("${Api.baseUrl}/cart/add"),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
-          "user_id":    widget.userId,
+          "user_id": widget.userId,
           "service_id": widget.service["id"],
-          "quantity":   1,
-          "category":   widget.service["category"],
+          "quantity": 1,
+          "category": widget.service["category"],
         }),
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
@@ -109,19 +115,22 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
           actionLabel: "View Cart",
           onAction: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => CartScreen(userId: widget.userId)),
+            MaterialPageRoute(
+                builder: (_) => CartScreen(userId: widget.userId)),
           ).then((_) => loadCartCount()),
         );
       } else {
         showToast("Failed to add. Please try again.", type: _ToastType.error);
       }
     } catch (_) {
-      showToast("Network error. Check your connection.", type: _ToastType.error);
+      showToast("Network error. Check your connection.",
+          type: _ToastType.error);
     }
   }
 
   // ── TOAST ─────────────────────────────────────────────────────────────────
-  void showToast(String msg, {
+  void showToast(
+    String msg, {
     _ToastType type = _ToastType.success,
     String? actionLabel,
     VoidCallback? onAction,
@@ -129,17 +138,24 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   }) {
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
-    entry = OverlayEntry(builder: (_) => _ToastWidget(
-      message: msg, type: type, actionLabel: actionLabel,
-      onAction: onAction, duration: duration,
-      onDismiss: () { try { entry.remove(); } catch (_) {} },
-    ));
+    entry = OverlayEntry(
+        builder: (_) => _ToastWidget(
+              message: msg,
+              type: type,
+              actionLabel: actionLabel,
+              onAction: onAction,
+              duration: duration,
+              onDismiss: () {
+                try {
+                  entry.remove();
+                } catch (_) {}
+              },
+            ));
     overlay.insert(entry);
   }
 
-  // ── WIDGETS ───────────────────────────────────────────────────────────────
+  // ── ADD TO CART BUTTON ────────────────────────────────────────────────────
 
-  // Add to Cart button — 3 states: loading / unavailable / available
   Widget _addToCartButton() {
     // State 1: still checking
     if (isCheckingAvailability) {
@@ -150,21 +166,23 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.grey.shade300,
             padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           ),
           child: const SizedBox(
-            height: 20, width: 20,
-            child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+            height: 20,
+            width: 20,
+            child: CircularProgressIndicator(
+                strokeWidth: 2.5, color: Colors.white),
           ),
         ),
       );
     }
 
-    // State 2: no caretaker available for this category
+    // State 2: no caretaker available
     if (!isCategoryAvailable) {
       final category = widget.service["category"] ?? "this service";
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Greyed-out disabled button
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
@@ -176,13 +194,12 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               backgroundColor: Colors.grey.shade300,
               foregroundColor: Colors.grey.shade500,
               padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
             ),
           ),
         ),
         const SizedBox(height: 14),
-
-        // Info card — user-friendly, no "blocked" language
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(16),
@@ -192,7 +209,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             border: Border.all(color: const Color(0xFFFFD166), width: 1.5),
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // Title row
             Row(children: [
               Container(
                 padding: const EdgeInsets.all(8),
@@ -216,8 +232,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               ),
             ]),
             const SizedBox(height: 10),
-
-            // Description
             Text(
               "We currently don't have any $category caregivers available "
               "in your area. Other service categories may still be available.",
@@ -225,8 +239,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                   fontSize: 13, color: Color(0xFF7A4100), height: 1.55),
             ),
             const SizedBox(height: 10),
-
-            // Notification hint
             Row(children: const [
               Icon(Icons.notifications_active_rounded,
                   color: Color(0xFFB7600A), size: 15),
@@ -247,7 +259,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
       ]);
     }
 
-    // State 3: available — normal active button
+    // State 3: available
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
@@ -256,11 +268,14 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             color: Colors.white, size: 20),
         label: const Text("Add to Cart",
             style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.white)),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primary,
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           elevation: 3,
           shadowColor: AppColors.primary.withOpacity(0.4),
         ),
@@ -268,7 +283,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
     );
   }
 
-  // Section info card (description / includes / excludes etc.)
+  // ── SECTION CARD ──────────────────────────────────────────────────────────
   Widget _sectionCard(String title, String? value) {
     if (value == null || value.trim().isEmpty) return const SizedBox();
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -295,7 +310,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               color: AppColors.primary.withOpacity(0.1),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(_sectionIcon(title), color: AppColors.primary, size: 15),
+            child:
+                Icon(_sectionIcon(title), color: AppColors.primary, size: 15),
           ),
           const SizedBox(width: 10),
           Text(title,
@@ -316,16 +332,22 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
 
   IconData _sectionIcon(String title) {
     switch (title.toLowerCase()) {
-      case "description":   return Icons.info_outline_rounded;
-      case "includes":      return Icons.check_circle_outline_rounded;
-      case "excludes":      return Icons.cancel_outlined;
-      case "requirements":  return Icons.assignment_outlined;
-      case "duration":      return Icons.access_time_rounded;
-      default:              return Icons.article_outlined;
+      case "description":
+        return Icons.info_outline_rounded;
+      case "includes":
+        return Icons.check_circle_outline_rounded;
+      case "excludes":
+        return Icons.cancel_outlined;
+      case "requirements":
+        return Icons.assignment_outlined;
+      case "duration":
+        return Icons.access_time_rounded;
+      default:
+        return Icons.article_outlined;
     }
   }
 
-  // Recommended service card
+  // ── RECOMMENDED CARD ──────────────────────────────────────────────────────
   Widget _recommendedCard(dynamic r) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final img = getImageUrl(r["image"]);
@@ -412,6 +434,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
     final s = widget.service;
     final imageUrl = getImageUrl(s["image"]);
     final priceType = s["price_type"] == "per_hour" ? " / hour" : "";
+    final category = (s["category"] ?? "").toString().trim();
 
     return Scaffold(
       backgroundColor:
@@ -424,7 +447,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               16, MediaQuery.of(context).padding.top + 16, 16, 20),
           decoration: const BoxDecoration(
             gradient: AppColors.gradient,
-            borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+            borderRadius:
+                BorderRadius.vertical(bottom: Radius.circular(28)),
           ),
           child: Row(children: [
             GestureDetector(
@@ -469,7 +493,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               ),
               if (cartCount > 0)
                 Positioned(
-                  right: -3, top: -3,
+                  right: -3,
+                  top: -3,
                   child: CircleAvatar(
                     radius: 9,
                     backgroundColor: Colors.red,
@@ -488,7 +513,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(18),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
               // Service image
               ClipRRect(
@@ -514,59 +540,84 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               ),
               const SizedBox(height: 18),
 
-              // Name + price
+              // ── NAME ────────────────────────────────────────────────────
               Text(s["name"] ?? "",
                   style: TextStyle(
                       fontSize: 23,
                       fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF1A1A2E))),
-              const SizedBox(height: 6),
-              Row(children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: AppColors.primary.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    "₹${s["price"] ?? 0}$priceType",
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary),
-                  ),
-                ),
-                if ((s["category"] ?? "").toString().isNotEmpty) ...[
-                  const SizedBox(width: 10),
+                      color: isDark
+                          ? Colors.white
+                          : const Color(0xFF1A1A2E))),
+              const SizedBox(height: 10),
+
+              // ── PRICE + CATEGORY — FIX: Wrap in a Wrap widget so chips
+              //    never overflow horizontally regardless of text length ──
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                children: [
+                  // Price chip
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
-                      color: Colors.indigo.withOpacity(0.08),
+                      color: AppColors.primary.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.indigo.withOpacity(0.25)),
+                      border: Border.all(
+                          color: AppColors.primary.withOpacity(0.3)),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.category_rounded,
-                          color: Colors.indigo, size: 13),
-                      const SizedBox(width: 5),
-                      Text(s["category"],
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.indigo)),
-                    ]),
+                    child: Text(
+                      "₹${s["price"] ?? 0}$priceType",
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primary),
+                    ),
                   ),
+
+                  // Category chip — only if non-empty
+                  if (category.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: Colors.indigo.withOpacity(0.25)),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.category_rounded,
+                            color: Colors.indigo, size: 13),
+                        const SizedBox(width: 5),
+                        // FIX: constrain text so it wraps cleanly
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth:
+                                MediaQuery.of(context).size.width - 200,
+                          ),
+                          child: Text(
+                            category,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.indigo),
+                          ),
+                        ),
+                      ]),
+                    ),
                 ],
-              ]),
+              ),
               const SizedBox(height: 20),
 
               // Info sections
-              _sectionCard("Description",   s["description"]),
-              _sectionCard("Includes",      s["includes"]),
-              _sectionCard("Excludes",      s["excludes"]),
-              _sectionCard("Requirements",  s["requirements"]),
-              _sectionCard("Duration",      s["duration"]),
+              _sectionCard("Description", s["description"]),
+              _sectionCard("Includes", s["includes"]),
+              _sectionCard("Excludes", s["excludes"]),
+              _sectionCard("Requirements", s["requirements"]),
+              _sectionCard("Duration", s["duration"]),
               const SizedBox(height: 8),
 
               // Add to cart button (3 states)
@@ -581,7 +632,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                     style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF1A1A2E))),
+                        color: isDark
+                            ? Colors.white
+                            : const Color(0xFF1A1A2E))),
                 const SizedBox(height: 12),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -651,7 +704,10 @@ class _ToastWidgetState extends State<_ToastWidget>
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   ({Color bg, Color accent, IconData icon, String label}) get _style =>
       switch (widget.type) {
@@ -692,7 +748,8 @@ class _ToastWidgetState extends State<_ToastWidget>
     final s = _style;
     return Positioned(
       top: MediaQuery.of(context).padding.top + 14,
-      left: 16, right: 16,
+      left: 16,
+      right: 16,
       child: SlideTransition(
         position: _slide,
         child: FadeTransition(
@@ -702,7 +759,8 @@ class _ToastWidgetState extends State<_ToastWidget>
             child: GestureDetector(
               onTap: _dismiss,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 14),
                 decoration: BoxDecoration(
                   color: s.bg,
                   borderRadius: BorderRadius.circular(16),
@@ -718,7 +776,8 @@ class _ToastWidgetState extends State<_ToastWidget>
                   children: [
                     // Icon circle
                     Container(
-                      width: 42, height: 42,
+                      width: 42,
+                      height: 42,
                       decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.15),
                           shape: BoxShape.circle),
@@ -755,8 +814,10 @@ class _ToastWidgetState extends State<_ToastWidget>
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 12, vertical: 6),
                                 decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(8)),
+                                    color:
+                                        Colors.white.withOpacity(0.2),
+                                    borderRadius:
+                                        BorderRadius.circular(8)),
                                 child: Text(widget.actionLabel!,
                                     style: const TextStyle(
                                         color: Colors.white,
@@ -773,9 +834,11 @@ class _ToastWidgetState extends State<_ToastWidget>
                     GestureDetector(
                       onTap: _dismiss,
                       child: Padding(
-                        padding: const EdgeInsets.only(left: 6, top: 2),
+                        padding:
+                            const EdgeInsets.only(left: 6, top: 2),
                         child: Icon(Icons.close_rounded,
-                            color: Colors.white.withOpacity(0.6), size: 18),
+                            color: Colors.white.withOpacity(0.6),
+                            size: 18),
                       ),
                     ),
                   ],

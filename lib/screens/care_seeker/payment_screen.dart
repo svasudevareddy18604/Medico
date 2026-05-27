@@ -44,8 +44,12 @@ class _PaymentScreenState extends State<PaymentScreen>
   String? _method;
   bool _processing = false;
 
-  // Flipped to true after payment URL is launched.
-  // When app resumes, we know the user returned from Cashfree.
+  // Set to the Cashfree order_id after session is created.
+  // Used during verification when the user returns from the browser.
+  String? _pendingCashfreeOrderId;
+
+  // Flipped to true after the payment URL is launched.
+  // When the app resumes we know the user returned from Cashfree.
   bool _paymentLaunched = false;
 
   bool get isDark => themeNotifier.value == ThemeMode.dark;
@@ -84,7 +88,7 @@ class _PaymentScreenState extends State<PaymentScreen>
   }
 
   /* =====================================================
-     PLACE ORDER  — called ONLY after payment
+     PLACE ORDER — called only after payment is verified
   ===================================================== */
 
   Future<Map<String, dynamic>?> _placeOrder({
@@ -186,7 +190,10 @@ class _PaymentScreenState extends State<PaymentScreen>
   }
 
   /* =====================================================
-     CASHFREE — STEP 1: create session & open payment
+     CASHFREE — STEP 1: create session & open payment page
+     FIX: Cashfree /pg/orders never returns payment_link.
+     We build the hosted checkout URL from payment_session_id:
+       https://payments.cashfree.com/order/#<session_id>
   ===================================================== */
 
   Future<void> _startCashfree() async {
@@ -194,7 +201,6 @@ class _PaymentScreenState extends State<PaymentScreen>
     setState(() => _processing = true);
 
     try {
-      // Only create the Cashfree payment session — NO order placed yet
       final res = await http.post(
         Uri.parse(Api.createOrder),
         headers: {"Content-Type": "application/json"},
@@ -215,63 +221,115 @@ class _PaymentScreenState extends State<PaymentScreen>
         return;
       }
 
-      final String? paymentLink = data["payment_link"];
+      // FIX: use payment_session_id — payment_link is never returned by /pg/orders
+      final String? sessionId = data["payment_session_id"];
 
-      if (paymentLink == null || paymentLink.isEmpty) {
-        _snack("Payment link unavailable. Please try again.");
+      if (sessionId == null || sessionId.isEmpty) {
+        _snack("Payment session unavailable. Please try again.");
         setState(() => _processing = false);
         return;
       }
 
-      // Mark launched — app resume will trigger order placement
+      // Save the Cashfree order_id so we can verify it on return
+      _pendingCashfreeOrderId = data["order_id"] as String?;
+
+      // Build the Cashfree hosted checkout URL from the session ID
+      final paymentUrl =
+          "https://payments.cashfree.com/order/#$sessionId";
+
+      // Mark launched — app resume will trigger verification + order placement
       _paymentLaunched = true;
 
       await launchUrl(
-        Uri.parse(paymentLink),
+        Uri.parse(paymentUrl),
         mode: LaunchMode.externalApplication,
       );
 
-      // Spinner stays visible while user is on Cashfree page
+      // Spinner stays visible while the user is on the Cashfree page
 
     } catch (e) {
       debugPrint("Cashfree error: $e");
       _snack("Failed to open payment page. Please try again.");
       _paymentLaunched = false;
+      _pendingCashfreeOrderId = null;
       if (mounted) setState(() => _processing = false);
     }
   }
 
   /* =====================================================
-     CASHFREE — STEP 2: user returned from browser
+     CASHFREE — STEP 2: user returned from browser.
+     FIX: ALWAYS verify payment status before placing order.
+     Do NOT assume "user returned = payment succeeded".
+     User may have cancelled, failed, or just closed the tab.
   ===================================================== */
 
   Future<void> _onPaymentReturned() async {
     if (!mounted) return;
     setState(() => _processing = true);
 
-    // NOW place the order — payment was already completed by user
-    final apiFuture = _placeOrder(method: "ONLINE").then((result) async {
-      if (result == null) return null;
-      await _clearCart();
-      return result;
-    });
+    final cashfreeOrderId = _pendingCashfreeOrderId;
+    _pendingCashfreeOrderId = null;
 
-    if (!mounted) return;
+    if (cashfreeOrderId == null) {
+      _snack("Could not verify payment. Please contact support.");
+      setState(() => _processing = false);
+      return;
+    }
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ProcessingScreen(
-          isCOD: false,
-          apiFuture: apiFuture,
-          userId: widget.userId,
-          subtotal: widget.subtotal,
-          serviceCharge: widget.serviceCharge,
-          discount: widget.discount,
-          total: widget.total,
+    try {
+      // Step 1: Verify payment with backend — DO NOT place order if this fails
+      final verifyRes = await http.post(
+        Uri.parse(Api.verifyPayment),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "cashfree_order_id": cashfreeOrderId,
+          // order_id is the DB order — we don't have it yet at this point,
+          // so pass 0 / null; your backend verify route updates by cashfree_order_id
+          "order_id": 0,
+        }),
+      );
+
+      final verifyData = jsonDecode(verifyRes.body) as Map<String, dynamic>;
+
+      if (verifyData["success"] != true) {
+        // Payment was NOT completed — show failure, do NOT place order
+        if (!mounted) return;
+        setState(() => _processing = false);
+        _snack("Payment was not completed. No booking was created.");
+        return;
+      }
+
+      // Step 2: Payment confirmed — now place the order
+      final apiFuture =
+          _placeOrder(method: "ONLINE", paymentId: cashfreeOrderId)
+              .then((result) async {
+        if (result == null) return null;
+        await _clearCart();
+        return result;
+      });
+
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ProcessingScreen(
+            isCOD: false,
+            apiFuture: apiFuture,
+            userId: widget.userId,
+            subtotal: widget.subtotal,
+            serviceCharge: widget.serviceCharge,
+            discount: widget.discount,
+            total: widget.total,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      debugPrint("Verification error: $e");
+      if (mounted) {
+        _snack("Could not verify payment. Please contact support.");
+      }
+    }
 
     if (mounted) setState(() => _processing = false);
   }
