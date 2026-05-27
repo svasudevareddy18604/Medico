@@ -1,47 +1,68 @@
-const router   = require("express").Router();
-const db       = require("../config/db");
-const Razorpay = require("razorpay");
-const { sendBookingConfirmedToUser, sendBookingAlertToCaretakers, sendCancellationNotifications } =
-  require("../services/notificationEmail.service");
+const router = require("express").Router();
+const db     = require("../config/db");
+const {
+  sendBookingConfirmedToUser,
+  sendBookingAlertToCaretakers,
+  sendCancellationNotifications,
+} = require("../services/notificationEmail.service");
 
-const razorpay = new Razorpay({
-  key_id:     process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+/* =====================================================
+   HELPERS
+===================================================== */
 
 const generateOrderCode = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "ORD-";
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 6; i++)
+    code += chars[Math.floor(Math.random() * chars.length)];
   return code;
 };
 
 const fmtDate = (d) =>
-  d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+  d
+    ? new Date(d).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
 
 const getServiceName = async (orderId) => {
   const [rows] = await db.query(
-    `SELECT s.name FROM services s JOIN order_items oi ON oi.service_id = s.id WHERE oi.order_id = ?`,
+    `SELECT s.name
+     FROM services s
+     JOIN order_items oi ON oi.service_id = s.id
+     WHERE oi.order_id = ?`,
     [orderId]
   );
   return rows.map((r) => r.name).join(", ") || "Service";
 };
 
 // Refund computed on subtotal only — service_charge is non-refundable
+// payment_method is now ONLINE (not RAZORPAY)
 const computeRefund = (order) => {
-  if (order.payment_method !== "RAZORPAY" || order.payment_status !== "PAID")
+  if (
+    order.payment_method !== "ONLINE" ||
+    order.payment_status !== "PAID"
+  )
     return { refundAmount: 0, refundPercent: 0, eligible: false };
-  const slotDt   = new Date(`${order.date.toISOString().split("T")[0]}T${order.slot}`);
-  const diffHrs  = (slotDt - new Date()) / (1000 * 60 * 60);
+
+  const slotDt  = new Date(`${order.date.toISOString().split("T")[0]}T${order.slot}`);
+  const diffHrs = (slotDt - new Date()) / (1000 * 60 * 60);
   const subtotal = parseFloat(order.subtotal ?? order.total);
-  if (diffHrs >= 3) return { refundAmount: subtotal,       refundPercent: 100, eligible: true };
-  if (diffHrs >  0) return { refundAmount: subtotal * 0.5, refundPercent: 50,  eligible: true };
+
+  if (diffHrs >= 3)
+    return { refundAmount: subtotal,       refundPercent: 100, eligible: true };
+  if (diffHrs >  0)
+    return { refundAmount: subtotal * 0.5, refundPercent: 50,  eligible: true };
+
   return { refundAmount: 0, refundPercent: 0, eligible: false };
 };
 
-/* =========================================
+/* =====================================================
    GET /orders/:userId
-========================================= */
+===================================================== */
+
 router.get("/:userId", async (req, res) => {
   try {
     const [orders] = await db.query(
@@ -50,7 +71,9 @@ router.get("/:userId", async (req, res) => {
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.id
        LEFT JOIN services    s  ON s.id = oi.service_id
-       WHERE o.user_id = ? GROUP BY o.id ORDER BY o.id DESC`,
+       WHERE o.user_id = ?
+       GROUP BY o.id
+       ORDER BY o.id DESC`,
       [req.params.userId]
     );
     return res.json(orders);
@@ -60,23 +83,28 @@ router.get("/:userId", async (req, res) => {
   }
 });
 
-/* =========================================
+/* =====================================================
    GET /orders/detail/:id
-========================================= */
+===================================================== */
+
 router.get("/detail/:id", async (req, res) => {
   try {
     const [[order]] = await db.query(
       `SELECT o.*, o.subtotal, o.service_charge,
               GROUP_CONCAT(s.name SEPARATOR ', ') AS service_names,
-              ct.first_name AS caregiver_name, ct.mobile AS caregiver_phone
+              ct.first_name AS caregiver_name,
+              ct.mobile     AS caregiver_phone
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.id
        LEFT JOIN services    s  ON s.id = oi.service_id
        LEFT JOIN users       ct ON ct.id = o.caretaker_id
-       WHERE o.id = ? GROUP BY o.id`,
+       WHERE o.id = ?
+       GROUP BY o.id`,
       [req.params.id]
     );
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found" });
+
     return res.json({ success: true, order });
   } catch (err) {
     console.error(err);
@@ -84,16 +112,29 @@ router.get("/detail/:id", async (req, res) => {
   }
 });
 
-/* =========================================
+/* =====================================================
    POST /orders/place
-========================================= */
+===================================================== */
+
 router.post("/place", async (req, res) => {
   let conn;
   try {
-    const { user_id, location, date, slot, payment_method, payment_id, latitude, longitude, items } = req.body;
+    const {
+      user_id,
+      location,
+      date,
+      slot,
+      payment_method,
+      payment_id,
+      latitude,
+      longitude,
+      items,
+    } = req.body;
 
     if (!items?.length)
-      return res.status(400).json({ success: false, message: "No services selected" });
+      return res
+        .status(400)
+        .json({ success: false, message: "No services selected" });
 
     const [[settings]] = await db
       .query(`SELECT service_charge FROM admin_settings LIMIT 1`)
@@ -115,23 +156,27 @@ router.post("/place", async (req, res) => {
     for (const category of Object.keys(grouped)) {
       const groupItems = grouped[category];
       const orderCode  = generateOrderCode();
-      const subtotal   = groupItems.reduce((s, i) => s + parseFloat(i.price), 0);
-      const total      = subtotal + serviceCharge;
-      const isPaid     = payment_method === "RAZORPAY" && !!payment_id;
+      const subtotal   = groupItems.reduce(
+        (s, i) => s + parseFloat(i.price),
+        0
+      );
+      const total = subtotal + serviceCharge;
 
-      /* =========================================
-         CHECK SERVICES THAT REQUIRE DOCUMENTS
-      ========================================= */
+      // payment_method is ONLINE (Cashfree) or COD
+      const isPaid =
+        payment_method === "ONLINE" && !!payment_id;
+
+      /* ── CHECK SERVICES THAT REQUIRE DOCUMENTS ── */
       const serviceIds = groupItems.map((item) => item.service_id);
 
       const [requiredServices] = await conn.query(
-        `SELECT id, name FROM services WHERE id IN (?) AND requires_documents = 1`,
+        `SELECT id, name
+         FROM services
+         WHERE id IN (?) AND requires_documents = 1`,
         [serviceIds]
       );
 
-      /* =========================================
-         VALIDATE DOCUMENTS UPLOADED
-      ========================================= */
+      /* ── VALIDATE DOCUMENTS UPLOADED ── */
       for (const service of requiredServices) {
         const [documents] = await conn.query(
           `SELECT id FROM booking_documents
@@ -150,14 +195,25 @@ router.post("/place", async (req, res) => {
 
       const [orderRes] = await conn.query(
         `INSERT INTO orders
-         (order_code, user_id, location, date, slot, subtotal, service_charge, total,
-          payment_method, payment_id, status, latitude, longitude, payment_status, category)
+         (order_code, user_id, location, date, slot,
+          subtotal, service_charge, total,
+          payment_method, payment_id,
+          status, latitude, longitude,
+          payment_status, category)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)`,
         [
-          orderCode, user_id, location, date, slot,
-          subtotal, serviceCharge, total,
-          payment_method, payment_id || "",
-          latitude || null, longitude || null,
+          orderCode,
+          user_id,
+          location,
+          date,
+          slot,
+          subtotal,
+          serviceCharge,
+          total,
+          payment_method,
+          payment_id || "",
+          latitude  || null,
+          longitude || null,
           isPaid ? "PAID" : "PENDING",
           category,
         ]
@@ -166,7 +222,9 @@ router.post("/place", async (req, res) => {
 
       for (const item of groupItems) {
         await conn.query(
-          `INSERT INTO order_items (order_id, service_id, quantity, price) VALUES (?, ?, 1, ?)`,
+          `INSERT INTO order_items
+           (order_id, service_id, quantity, price)
+           VALUES (?, ?, 1, ?)`,
           [orderId, item.service_id, item.price]
         );
 
@@ -178,11 +236,23 @@ router.post("/place", async (req, res) => {
         );
       }
 
-      createdOrders.push({ orderId, orderCode, category, subtotal, serviceCharge, total });
+      createdOrders.push({
+        orderId,
+        orderCode,
+        category,
+        subtotal,
+        serviceCharge,
+        total,
+      });
     }
 
     await conn.commit();
-    res.json({ success: true, message: "Order placed successfully", orders: createdOrders });
+
+    res.json({
+      success: true,
+      message: "Order placed successfully",
+      orders: createdOrders,
+    });
 
     // Background: send confirmation emails
     setImmediate(async () => {
@@ -194,8 +264,21 @@ router.post("/place", async (req, res) => {
         const dateStr = fmtDate(date);
         for (const ord of createdOrders) {
           const serviceName = await getServiceName(ord.orderId);
-          await sendBookingConfirmedToUser({ user, order: ord, serviceName, dateStr, slot, payment_method });
-          await sendBookingAlertToCaretakers({ order: ord, serviceName, dateStr, slot, location });
+          await sendBookingConfirmedToUser({
+            user,
+            order: ord,
+            serviceName,
+            dateStr,
+            slot,
+            payment_method,
+          });
+          await sendBookingAlertToCaretakers({
+            order: ord,
+            serviceName,
+            dateStr,
+            slot,
+            location,
+          });
         }
       } catch (err) {
         console.error("BACKGROUND EMAIL ERROR:", err);
@@ -204,39 +287,69 @@ router.post("/place", async (req, res) => {
   } catch (err) {
     if (conn) await conn.rollback();
     console.error(err);
-    return res.status(500).json({ success: false, message: "Failed to place order" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to place order" });
   } finally {
     if (conn) conn.release();
   }
 });
 
-/* =========================================
+/* =====================================================
    POST /orders/:orderId/cancel
-========================================= */
+===================================================== */
+
 router.post("/:orderId/cancel", async (req, res) => {
   try {
     const { orderId } = req.params;
     const { reason }  = req.body;
 
-    const [[order]] = await db.query(`SELECT * FROM orders WHERE id = ?`, [orderId]);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
-    if (["COMPLETED", "CANCELLED"].includes(order.status))
-      return res.status(400).json({ success: false, message: "Order cannot be cancelled." });
+    const [[order]] = await db.query(
+      `SELECT * FROM orders WHERE id = ?`,
+      [orderId]
+    );
+    if (!order)
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
 
-    const { refundAmount, refundPercent, eligible } = computeRefund(order);
+    if (["COMPLETED", "CANCELLED"].includes(order.status))
+      return res
+        .status(400)
+        .json({ success: false, message: "Order cannot be cancelled." });
+
+    const { refundAmount, refundPercent, eligible } =
+      computeRefund(order);
 
     await db.query(
-      `UPDATE orders SET status='CANCELLED', cancel_reason=?, cancelled_at=NOW(),
-       refund_amount=?, refund_status=? WHERE id=?`,
-      [reason || "", refundAmount, eligible ? "PENDING" : "NOT_ELIGIBLE", orderId]
+      `UPDATE orders
+       SET status       = 'CANCELLED',
+           cancel_reason = ?,
+           cancelled_at  = NOW(),
+           refund_amount = ?,
+           refund_status = ?
+       WHERE id = ?`,
+      [
+        reason || "",
+        refundAmount,
+        eligible ? "PENDING" : "NOT_ELIGIBLE",
+        orderId,
+      ]
     );
 
     if (eligible && refundAmount > 0) {
       await db.query(
         `INSERT INTO refund_requests
-         (order_id, user_id, payment_id, refund_amount, refund_percent, status, requested_at)
+         (order_id, user_id, payment_id,
+          refund_amount, refund_percent, status, requested_at)
          VALUES (?, ?, ?, ?, ?, 'PENDING', NOW())`,
-        [order.id, order.user_id, order.payment_id, refundAmount, refundPercent]
+        [
+          order.id,
+          order.user_id,
+          order.payment_id,
+          refundAmount,
+          refundPercent,
+        ]
       );
     }
 
@@ -249,30 +362,38 @@ router.post("/:orderId/cancel", async (req, res) => {
         refundPercent,
         method: order.payment_method,
         note: !eligible
-          ? (order.payment_method === "COD"
-              ? "COD orders are not eligible for refund."
-              : "Refund not applicable — service time has already passed.")
+          ? order.payment_method === "COD"
+            ? "COD orders are not eligible for refund."
+            : "Refund not applicable — service time has already passed."
           : `₹${refundAmount.toFixed(0)} (${refundPercent}%) of service amount will be refunded after admin approval. Service charge is non-refundable.`,
       },
     });
 
     setImmediate(async () => {
-      try { await sendCancellationNotifications(order); } catch (_) {}
+      try {
+        await sendCancellationNotifications(order);
+      } catch (_) {}
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, message: "Cancellation failed" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Cancellation failed" });
   }
 });
 
-/* =========================================
+/* =====================================================
    GET /orders/admin/refunds
-========================================= */
+===================================================== */
+
 router.get("/admin/refunds", async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT rr.*, o.order_code, o.subtotal, o.service_charge, o.total, o.payment_method,
-              o.payment_id AS order_payment_id, o.date, o.slot, o.cancel_reason, o.cancelled_at,
+      `SELECT rr.*,
+              o.order_code, o.subtotal, o.service_charge, o.total,
+              o.payment_method,
+              o.payment_id AS order_payment_id,
+              o.date, o.slot, o.cancel_reason, o.cancelled_at,
               u.first_name, u.email, u.mobile
        FROM refund_requests rr
        JOIN orders o ON o.id = rr.order_id
@@ -286,58 +407,84 @@ router.get("/admin/refunds", async (req, res) => {
   }
 });
 
-/* =========================================
+/* =====================================================
    POST /orders/admin/refunds/:id/approve
-========================================= */
+   NOTE: Cashfree refund API not yet integrated.
+   This marks the refund as approved in DB only.
+   Admin must manually process refund via Cashfree
+   dashboard until API integration is added.
+===================================================== */
+
 router.post("/admin/refunds/:id/approve", async (req, res) => {
   try {
-    const [[refund]] = await db.query(`SELECT * FROM refund_requests WHERE id = ?`, [req.params.id]);
-    if (!refund) return res.status(404).json({ success: false, message: "Not found" });
-    if (refund.status !== "PENDING")
-      return res.status(400).json({ success: false, message: "Already processed." });
+    const [[refund]] = await db.query(
+      `SELECT * FROM refund_requests WHERE id = ?`,
+      [req.params.id]
+    );
 
-    const rzRefund = await razorpay.payments.refund(refund.payment_id, {
-      amount: Math.round(refund.refund_amount * 100),
-      speed:  "optimum",
-      notes:  { order_id: refund.order_id.toString(), reason: "Cancellation refund" },
-    });
+    if (!refund)
+      return res
+        .status(404)
+        .json({ success: false, message: "Not found" });
+
+    if (refund.status !== "PENDING")
+      return res
+        .status(400)
+        .json({ success: false, message: "Already processed." });
 
     await db.query(
-      `UPDATE refund_requests SET status='APPROVED', razorpay_refund_id=?, processed_at=NOW() WHERE id=?`,
-      [rzRefund.id, refund.id]
+      `UPDATE refund_requests
+       SET status = 'APPROVED', processed_at = NOW()
+       WHERE id = ?`,
+      [refund.id]
     );
-    await db.query(`UPDATE orders SET refund_status='REFUNDED' WHERE id=?`, [refund.order_id]);
+
+    await db.query(
+      `UPDATE orders SET refund_status = 'REFUNDED' WHERE id = ?`,
+      [refund.order_id]
+    );
 
     return res.json({
       success: true,
-      message: `Refund of ₹${refund.refund_amount} initiated.`,
-      razorpay_refund_id: rzRefund.id,
+      message: `Refund of ₹${refund.refund_amount} marked as approved. Please process manually via Cashfree dashboard.`,
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, message: "Refund failed: " + err.message });
+    return res
+      .status(500)
+      .json({ success: false, message: "Refund approval failed" });
   }
 });
 
-/* =========================================
+/* =====================================================
    POST /orders/admin/refunds/:id/reject
-========================================= */
+===================================================== */
+
 router.post("/admin/refunds/:id/reject", async (req, res) => {
   try {
     const { reason } = req.body;
+
     await db.query(
-      `UPDATE refund_requests SET status='REJECTED', reject_reason=?, processed_at=NOW() WHERE id=?`,
+      `UPDATE refund_requests
+       SET status = 'REJECTED', reject_reason = ?, processed_at = NOW()
+       WHERE id = ?`,
       [reason || "", req.params.id]
     );
+
     await db.query(
-      `UPDATE orders o JOIN refund_requests rr ON rr.order_id = o.id
-       SET o.refund_status = 'REJECTED' WHERE rr.id = ?`,
+      `UPDATE orders o
+       JOIN refund_requests rr ON rr.order_id = o.id
+       SET o.refund_status = 'REJECTED'
+       WHERE rr.id = ?`,
       [req.params.id]
     );
+
     return res.json({ success: true, message: "Refund rejected." });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, message: "Rejection failed." });
+    return res
+      .status(500)
+      .json({ success: false, message: "Rejection failed." });
   }
 });
 
