@@ -521,7 +521,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _sectionTitle(
-                "Order Summary", Icons.receipt_long_rounded),
+                "Booking Summary", Icons.receipt_long_rounded),
             const SizedBox(height: 14),
             ...grouped.entries.map((e) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),

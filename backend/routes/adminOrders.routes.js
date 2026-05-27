@@ -1,16 +1,12 @@
-const express  = require("express");
-const router   = express.Router();
-const db       = require("../config/db");
-const Razorpay = require("razorpay");
+const express    = require("express");
+const router     = express.Router();
+const db         = require("../config/db");
 const nodemailer = require("nodemailer");
 
-/* ── Razorpay ────────────────────────────────────────────────────────────── */
-const razorpay = new Razorpay({
-  key_id:     process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+/* =====================================================
+   NODEMAILER
+===================================================== */
 
-/* ── Nodemailer ──────────────────────────────────────────────────────────── */
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
@@ -19,7 +15,10 @@ const transporter = nodemailer.createTransport({
 const sendMail = async ({ to, subject, html }) => {
   try {
     await transporter.sendMail({
-      from: `"Medico" <${process.env.MAIL_USER}>`, to, subject, html,
+      from: `"Medico" <${process.env.MAIL_USER}>`,
+      to,
+      subject,
+      html,
     });
     console.log(`Mail sent → ${to}`);
   } catch (err) {
@@ -27,7 +26,11 @@ const sendMail = async ({ to, subject, html }) => {
   }
 };
 
-const refundApprovedEmail = ({ name, email, amount, orderCode, refundId }) =>
+/* =====================================================
+   EMAIL TEMPLATES
+===================================================== */
+
+const refundApprovedEmail = ({ name, email, amount, orderCode }) =>
   sendMail({
     to: email,
     subject: `Refund of ₹${amount} Approved – ${orderCode}`,
@@ -46,9 +49,8 @@ const refundApprovedEmail = ({ name, email, amount, orderCode, refundId }) =>
         <p style="margin:8px 0 0;color:#0F6E56;font-size:32px;font-weight:700">₹${amount}</p>
       </div>
       <p style="color:#555;font-size:13.5px;line-height:1.7">
-        Initiated via Razorpay
-        (<code style="background:#f2f2f2;padding:2px 6px;border-radius:4px">${refundId}</code>).
-        Allow <strong>5–7 business days</strong>.
+        Your refund has been approved and will be processed via Cashfree.
+        Allow <strong>5–7 business days</strong> for the amount to reflect.
       </p>
       <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
       <p style="color:#999;font-size:12px;text-align:center">Medico Healthcare Services</p>
@@ -82,10 +84,10 @@ const refundRejectedEmail = ({ name, email, amount, orderCode, reason }) =>
   </div>`,
   });
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   GET ALL ORDERS
-   ✅ Includes cancelled_by JOIN to show who cancelled (assigned_caretaker_id)
-═══════════════════════════════════════════════════════════════════════════ */
+/* =====================================================
+   GET /  — ALL ORDERS (admin)
+===================================================== */
+
 router.get("/", async (req, res) => {
   try {
     const [orders] = await db.query(`
@@ -126,8 +128,8 @@ router.get("/", async (req, res) => {
         cancelled_by.mobile     AS cancelled_caretaker_mobile
 
       FROM orders o
-      LEFT JOIN users u            ON o.user_id              = u.id
-      LEFT JOIN users c            ON o.caretaker_id         = c.id
+      LEFT JOIN users u            ON o.user_id               = u.id
+      LEFT JOIN users c            ON o.caretaker_id          = c.id
       LEFT JOIN users cancelled_by ON o.assigned_caretaker_id = cancelled_by.id
 
       ORDER BY o.created_at DESC
@@ -139,13 +141,16 @@ router.get("/", async (req, res) => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   GET CARETAKERS BY CATEGORY (old simple endpoint — kept for compatibility)
-═══════════════════════════════════════════════════════════════════════════ */
+/* =====================================================
+   GET /caretakers-by-category
+===================================================== */
+
 router.get("/caretakers-by-category", async (req, res) => {
   const { category } = req.query;
   if (!category)
-    return res.status(400).json({ success: false, message: "Category required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Category required" });
 
   try {
     const [rows] = await db.query(
@@ -154,7 +159,7 @@ router.get("/caretakers-by-category", async (req, res) => {
               cp.caregiver_type, cp.experience, cp.availability
        FROM users u
        LEFT JOIN caretaker_profiles cp ON cp.user_id = u.id
-       WHERE u.role = 'care_taker'
+       WHERE u.role           = 'care_taker'
          AND u.approval_status = 'approved'
          AND cp.caregiver_type = ?
        ORDER BY u.first_name ASC`,
@@ -167,10 +172,11 @@ router.get("/caretakers-by-category", async (req, res) => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   GET AVAILABLE CARETAKERS FOR REASSIGN
-   ✅ Slot-aware: excludes caretakers already busy on same date+slot
-═══════════════════════════════════════════════════════════════════════════ */
+/* =====================================================
+   GET /available-caretakers/:orderId
+   Slot-aware: excludes caretakers busy on same date+slot
+===================================================== */
+
 router.get("/available-caretakers/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -181,7 +187,9 @@ router.get("/available-caretakers/:orderId", async (req, res) => {
     );
 
     if (!order)
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
 
     const [caretakers] = await db.query(
       `
@@ -196,9 +204,9 @@ router.get("/available-caretakers/:orderId", async (req, res) => {
       FROM users u
       JOIN caretaker_profiles cp ON cp.user_id = u.id
 
-      WHERE u.role            = 'care_taker'
-        AND u.approval_status = 'approved'
-        AND cp.caregiver_type = ?
+      WHERE u.role             = 'care_taker'
+        AND u.approval_status  = 'approved'
+        AND cp.caregiver_type  = ?
 
         AND u.id NOT IN (
           SELECT caretaker_id
@@ -214,34 +222,42 @@ router.get("/available-caretakers/:orderId", async (req, res) => {
       [order.category, order.date, order.slot]
     );
 
-    return res.json({ success: true, count: caretakers.length, data: caretakers });
+    return res.json({
+      success: true,
+      count: caretakers.length,
+      data: caretakers,
+    });
   } catch (err) {
     console.error("AVAILABLE CARETAKERS ERROR:", err);
     return res.status(500).json({ success: false, message: "Fetch failed" });
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* =====================================================
    POST /:id/assign  — ASSIGN / REASSIGN CARETAKER
-   ✅ Slot conflict check before assigning
-   ✅ Sets status → ACCEPTED (not ASSIGNED)
-═══════════════════════════════════════════════════════════════════════════ */
+   Slot conflict check before assigning
+   Sets status → ACCEPTED
+===================================================== */
+
 router.post("/:id/assign", async (req, res) => {
   try {
     const { id } = req.params;
     const { caretaker_id } = req.body;
 
     if (!caretaker_id)
-      return res.status(400).json({ success: false, message: "caretaker_id required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "caretaker_id required" });
 
-    /* ── Get order ── */
     const [[order]] = await db.query(
       `SELECT id, date, slot, category FROM orders WHERE id = ?`,
       [id]
     );
 
     if (!order)
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
 
     /* ── Slot conflict check ── */
     const [[conflict]] = await db.query(
@@ -262,7 +278,6 @@ router.post("/:id/assign", async (req, res) => {
         message: "Caretaker already busy for this slot",
       });
 
-    /* ── Assign ── */
     await db.query(
       `
       UPDATE orders
@@ -275,25 +290,36 @@ router.post("/:id/assign", async (req, res) => {
       [caretaker_id, caretaker_id, id]
     );
 
-    return res.json({ success: true, message: "Caretaker assigned successfully" });
+    return res.json({
+      success: true,
+      message: "Caretaker assigned successfully",
+    });
   } catch (err) {
     console.error("ASSIGN ERROR:", err);
     return res.status(500).json({ success: false, message: "Assignment failed" });
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* =====================================================
    PUT /:id/cancel  — CANCEL ORDER (admin)
-═══════════════════════════════════════════════════════════════════════════ */
+===================================================== */
+
 router.put("/:id/cancel", async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body;
+
   if (!reason?.trim())
-    return res.status(400).json({ success: false, message: "Reason required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Reason required" });
 
   try {
     await db.query(
-      `UPDATE orders SET status = 'CANCELLED', cancel_reason = ?, cancelled_at = NOW() WHERE id = ?`,
+      `UPDATE orders
+       SET status        = 'CANCELLED',
+           cancel_reason = ?,
+           cancelled_at  = NOW()
+       WHERE id = ?`,
       [reason, id]
     );
     res.json({ success: true, message: "Order cancelled" });
@@ -303,17 +329,24 @@ router.put("/:id/cancel", async (req, res) => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* =====================================================
    PUT /status/:id  — UPDATE STATUS (admin override)
-═══════════════════════════════════════════════════════════════════════════ */
+===================================================== */
+
 router.put("/status/:id", async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
+
   if (!status)
-    return res.status(400).json({ success: false, message: "Status required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Status required" });
 
   try {
-    await db.query("UPDATE orders SET status = ? WHERE id = ?", [status, id]);
+    await db.query("UPDATE orders SET status = ? WHERE id = ?", [
+      status,
+      id,
+    ]);
     res.json({ success: true, message: "Status updated" });
   } catch (err) {
     console.error("PUT /status/:id:", err);
@@ -321,11 +354,10 @@ router.put("/status/:id", async (req, res) => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   REFUNDS
-═══════════════════════════════════════════════════════════════════════════ */
+/* =====================================================
+   GET /refunds  — GET ALL REFUND REQUESTS
+===================================================== */
 
-/* ── GET REFUND REQUESTS ─────────────────────────────────────────────────── */
 router.get("/refunds", async (req, res) => {
   const { order_id } = req.query;
   try {
@@ -339,7 +371,10 @@ router.get("/refunds", async (req, res) => {
       JOIN users  u ON u.id = rr.user_id
     `;
     const params = [];
-    if (order_id) { query += " WHERE rr.order_id = ?"; params.push(order_id); }
+    if (order_id) {
+      query += " WHERE rr.order_id = ?";
+      params.push(order_id);
+    }
     query += " ORDER BY rr.requested_at DESC";
 
     const [rows] = await db.query(query, params);
@@ -350,7 +385,13 @@ router.get("/refunds", async (req, res) => {
   }
 });
 
-/* ── APPROVE REFUND → Razorpay + email ───────────────────────────────────── */
+/* =====================================================
+   POST /refunds/:id/approve  — APPROVE REFUND
+   NOTE: Cashfree refund API not yet integrated.
+   Admin marks approved in DB → must manually process
+   via Cashfree dashboard until API is wired up.
+===================================================== */
+
 router.post("/refunds/:id/approve", async (req, res) => {
   try {
     const [[refund]] = await db.query(
@@ -360,50 +401,63 @@ router.post("/refunds/:id/approve", async (req, res) => {
        WHERE rr.id = ?`,
       [req.params.id]
     );
+
     if (!refund)
-      return res.status(404).json({ success: false, message: "Refund not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Refund not found" });
+
     if (refund.status !== "PENDING")
-      return res.status(400).json({ success: false, message: "Already processed" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Already processed" });
 
     const [[order]] = await db.query(
-      "SELECT order_code, payment_id FROM orders WHERE id = ?",
+      "SELECT order_code FROM orders WHERE id = ?",
       [refund.order_id]
     );
-    if (!order?.payment_id)
-      return res.status(400).json({
-        success: false,
-        message: "No Razorpay payment_id found. Cannot process refund.",
-      });
 
-    const rzRefund = await razorpay.payments.refund(order.payment_id, {
-      amount: Math.round(parseFloat(refund.refund_amount) * 100),
-      speed:  "optimum",
-      notes:  { order_id: String(refund.order_id), medico_refund_id: String(refund.id) },
+    await db.query(
+      `UPDATE refund_requests
+       SET status       = 'APPROVED',
+           processed_at = NOW()
+       WHERE id = ?`,
+      [refund.id]
+    );
+
+    await db.query(
+      `UPDATE orders
+       SET refund_status  = 'REFUNDED',
+           payment_status = 'REFUNDED'
+       WHERE id = ?`,
+      [refund.order_id]
+    );
+
+    res.json({
+      success: true,
+      message: `Refund of ₹${refund.refund_amount} marked as approved. Please process manually via Cashfree dashboard.`,
     });
 
-    await db.query(
-      `UPDATE refund_requests SET status = 'APPROVED', razorpay_refund_id = ?, processed_at = NOW() WHERE id = ?`,
-      [rzRefund.id, refund.id]
+    setImmediate(() =>
+      refundApprovedEmail({
+        name:      refund.first_name,
+        email:     refund.email,
+        amount:    refund.refund_amount,
+        orderCode: order?.order_code || `#${refund.order_id}`,
+      })
     );
-    await db.query(
-      `UPDATE orders SET refund_status = 'REFUNDED', payment_status = 'REFUNDED' WHERE id = ?`,
-      [refund.order_id]
-    );
-
-    res.json({ success: true, message: `Refund of ₹${refund.refund_amount} initiated.`, razorpay_refund_id: rzRefund.id });
-
-    setImmediate(() => refundApprovedEmail({
-      name: refund.first_name, email: refund.email,
-      amount: refund.refund_amount, orderCode: order.order_code || `#${refund.order_id}`,
-      refundId: rzRefund.id,
-    }));
   } catch (err) {
     console.error("POST /refunds/:id/approve:", err);
-    res.status(500).json({ success: false, message: "Refund failed: " + (err.error?.description || err.message) });
+    res
+      .status(500)
+      .json({ success: false, message: "Refund approval failed" });
   }
 });
 
-/* ── REJECT REFUND + email ───────────────────────────────────────────────── */
+/* =====================================================
+   POST /refunds/:id/reject  — REJECT REFUND
+===================================================== */
+
 router.post("/refunds/:id/reject", async (req, res) => {
   const { reason } = req.body;
   try {
@@ -414,28 +468,52 @@ router.post("/refunds/:id/reject", async (req, res) => {
        WHERE rr.id = ?`,
       [req.params.id]
     );
-    if (!refund)
-      return res.status(404).json({ success: false, message: "Refund not found" });
-    if (refund.status !== "PENDING")
-      return res.status(400).json({ success: false, message: "Already processed" });
 
-    const [[order]] = await db.query("SELECT order_code FROM orders WHERE id = ?", [refund.order_id]);
+    if (!refund)
+      return res
+        .status(404)
+        .json({ success: false, message: "Refund not found" });
+
+    if (refund.status !== "PENDING")
+      return res
+        .status(400)
+        .json({ success: false, message: "Already processed" });
+
+    const [[order]] = await db.query(
+      "SELECT order_code FROM orders WHERE id = ?",
+      [refund.order_id]
+    );
 
     await db.query(
-      `UPDATE refund_requests SET status = 'REJECTED', reject_reason = ?, processed_at = NOW() WHERE id = ?`,
+      `UPDATE refund_requests
+       SET status        = 'REJECTED',
+           reject_reason = ?,
+           processed_at  = NOW()
+       WHERE id = ?`,
       [reason || "", req.params.id]
     );
-    await db.query("UPDATE orders SET refund_status = 'REJECTED' WHERE id = ?", [refund.order_id]);
+
+    await db.query(
+      "UPDATE orders SET refund_status = 'REJECTED' WHERE id = ?",
+      [refund.order_id]
+    );
 
     res.json({ success: true, message: "Refund rejected." });
 
-    setImmediate(() => refundRejectedEmail({
-      name: refund.first_name, email: refund.email,
-      amount: refund.refund_amount, orderCode: order?.order_code || `#${refund.order_id}`, reason,
-    }));
+    setImmediate(() =>
+      refundRejectedEmail({
+        name:      refund.first_name,
+        email:     refund.email,
+        amount:    refund.refund_amount,
+        orderCode: order?.order_code || `#${refund.order_id}`,
+        reason,
+      })
+    );
   } catch (err) {
     console.error("POST /refunds/:id/reject:", err);
-    res.status(500).json({ success: false, message: "Rejection failed" });
+    res
+      .status(500)
+      .json({ success: false, message: "Rejection failed" });
   }
 });
 

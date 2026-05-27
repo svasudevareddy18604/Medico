@@ -39,16 +39,18 @@ dependencies:
   geocoding: ^4.0.0
   flutter_map: ^7.0.0
   latlong2: ^0.9.0
+
+  # URL Launcher
   url_launcher: ^6.2.5
+
+  # WebView
+  webview_flutter: ^4.7.0
 
   # Image
   image_picker: ^1.1.2
 
   # Permissions
   permission_handler: ^11.3.1
-
-  # CASHFREE PAYMENT
-  cashfree_pg: 2.0.12+32
 
   # FIREBASE
   firebase_core: ^2.32.0
