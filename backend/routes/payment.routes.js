@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-const { Cashfree, CFEnvironment } = require("cashfree-pg");
+const { Cashfree } = require("cashfree-pg");
 
 const db = require("../config/db");
 const transporter = require("../config/mailer");
@@ -15,8 +15,8 @@ Cashfree.XClientId = process.env.CASHFREE_APP_ID;
 Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
 Cashfree.XEnvironment =
   process.env.NODE_ENV === "production"
-    ? CFEnvironment.PRODUCTION
-    : CFEnvironment.SANDBOX;
+    ? "PRODUCTION"
+    : "SANDBOX";
 
 /* =====================================================
    COMMON RESPONSE
@@ -62,7 +62,10 @@ router.post("/create-order", async (req, res) => {
       }
     };
 
-    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
+    const response = await Cashfree.PG.orders.create(
+      "2023-08-01",
+      request
+    );
 
     return sendResponse(res, true, "Order created", {
       payment_session_id: response.data.payment_session_id,
@@ -82,7 +85,10 @@ router.post("/verify", async (req, res) => {
   try {
     const { cashfree_order_id, order_id, fcm_token } = req.body;
 
-    const response = await Cashfree.PGFetchOrder("2023-08-01", cashfree_order_id);
+    const response = await Cashfree.PG.orders.get(
+      "2023-08-01",
+      cashfree_order_id
+    );
 
     const orderStatus = response.data.order_status;
 

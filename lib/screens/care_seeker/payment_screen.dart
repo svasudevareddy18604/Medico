@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:cashfree_pg/cashfree_pg.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import 'package:medico/utils/app_colors.dart';
 import 'package:medico/main.dart';
 import '../../config/api.dart';
-import 'payment_failed_screen.dart';
 import 'processing_screen.dart';
 import 'package:intl/intl.dart';
 
@@ -174,7 +173,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   /* =====================================================
-     CASHFREE ONLINE FLOW
+     CASHFREE HOSTED CHECKOUT FLOW
   ===================================================== */
 
   Future<void> _startCashfree() async {
@@ -182,101 +181,72 @@ class _PaymentScreenState extends State<PaymentScreen> {
     setState(() => _processing = true);
 
     try {
-      // Step 1 — create order on backend
-      final res = await http.post(
+      // Step 1 — place order on backend
+      final orderResult = await _placeOrder(method: "ONLINE");
+
+      if (orderResult == null) {
+        _snack("Order creation failed");
+        setState(() => _processing = false);
+        return;
+      }
+
+      // Step 2 — create Cashfree payment session
+      final paymentRes = await http.post(
         Uri.parse(Api.createOrder),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "amount": widget.total,
           "customer_id": widget.userId.toString(),
           "customer_name": "Medico User",
-          "customer_email": "user@email.com",
+          "customer_email": "user@test.com",
           "customer_phone": "9999999999",
         }),
       );
 
-      final data = jsonDecode(res.body);
+      final paymentData = jsonDecode(paymentRes.body);
 
-      if (data["success"] != true) {
-        _snack("Failed to create order");
+      if (paymentData["success"] != true) {
+        _snack("Payment initialization failed");
         setState(() => _processing = false);
         return;
       }
 
-      final String sessionId = data["payment_session_id"];
-      final String cashfreeOrderId = data["order_id"];
+      // Step 3 — open Cashfree hosted checkout in browser
+      final sessionId = paymentData["payment_session_id"];
+      final paymentUrl =
+          "https://payments.cashfree.com/order/#$sessionId";
 
-      // Step 2 — launch Cashfree SDK
-      final cashfree = CFPaymentGatewayService();
-
-      cashfree.setCallback(
-        // ── SUCCESS ──
-        (String orderId) async {
-          final apiFuture = _placeOrder(
-            method: "ONLINE",
-            paymentId: orderId,
-          ).then((result) async {
-            if (result == null) return null;
-
-            // verify payment on backend
-            await http.post(
-              Uri.parse(Api.verifyPayment),
-              headers: {"Content-Type": "application/json"},
-              body: jsonEncode({
-                "cashfree_order_id": orderId,
-                "order_id": result["order_id"],
-              }),
-            );
-
-            await _clearCart();
-            return result;
-          });
-
-          if (!mounted) return;
-
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ProcessingScreen(
-                isCOD: false,
-                apiFuture: apiFuture,
-                userId: widget.userId,
-                subtotal: widget.subtotal,
-                serviceCharge: widget.serviceCharge,
-                discount: widget.discount,
-                total: widget.total,
-              ),
-            ),
-          );
-        },
-
-        // ── FAILURE ──
-        (String error, String? orderId) {
-          if (!mounted) return;
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const PaymentFailedScreen(),
-            ),
-          );
-        },
+      await launchUrl(
+        Uri.parse(paymentUrl),
+        mode: LaunchMode.externalApplication,
       );
 
-      // Step 3 — open payment sheet
-      await cashfree.doPayment(
-        cfPaymentSession: CFPaymentSession(
-          paymentSessionId: sessionId,
-          orderId: cashfreeOrderId,
-          environment: kDebugMode
-              ? CFEnvironment.SANDBOX
-              : CFEnvironment.PRODUCTION,
+      // Step 4 — clear cart and navigate to processing screen
+      await _clearCart();
+
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ProcessingScreen(
+            isCOD: false,
+            apiFuture: Future.value(orderResult),
+            userId: widget.userId,
+            subtotal: widget.subtotal,
+            serviceCharge: widget.serviceCharge,
+            discount: widget.discount,
+            total: widget.total,
+          ),
         ),
       );
     } catch (e) {
-      _snack("Cashfree payment failed");
       debugPrint(e.toString());
+      _snack("Payment failed");
     } finally {
-      if (mounted) setState(() => _processing = false);
+      if (mounted) {
+        setState(() => _processing = false);
+      }
     }
   }
 
@@ -393,8 +363,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
               isDark ? Border.all(color: Colors.grey.shade800) : null,
           boxShadow: [
             BoxShadow(
-              color: Colors.black
-                  .withOpacity(isDark ? 0.3 : 0.05),
+              color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
               blurRadius: 12,
               offset: const Offset(0, 4),
             )
@@ -447,8 +416,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
-                          color:
-                              isDark ? Colors.white : Colors.black87)),
+                          color: isDark
+                              ? Colors.white
+                              : Colors.black87)),
                 ]),
           ),
         ]),
@@ -473,8 +443,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color:
-                            isDark ? Colors.white : Colors.black87)),
+                        color: isDark
+                            ? Colors.white
+                            : Colors.black87)),
               ]),
               const SizedBox(height: 10),
               Row(children: [
@@ -512,10 +483,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
         grouped[name] = {
           "qty": 1,
           "price":
-              double.tryParse(item["price"]?.toString() ?? "0") ?? 0.0
+              double.tryParse(item["price"]?.toString() ?? "0") ?? 0.0,
         };
       }
     }
+
     return _card(
       child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -532,7 +504,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       decoration: BoxDecoration(
                           color:
                               AppColors.primary.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(10)),
+                          borderRadius:
+                              BorderRadius.circular(10)),
                       child: Icon(
                           Icons.medical_services_outlined,
                           color: AppColors.primary,
@@ -567,8 +540,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     ? Colors.grey.shade700
                     : Colors.grey.shade200),
             const SizedBox(height: 8),
-            _billRow(
-                "Subtotal", "₹${widget.subtotal.toStringAsFixed(2)}"),
+            _billRow("Subtotal",
+                "₹${widget.subtotal.toStringAsFixed(2)}"),
             if (widget.serviceCharge > 0) ...[
               const SizedBox(height: 6),
               _billRow(
@@ -594,8 +567,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     ? Colors.grey.shade700
                     : Colors.grey.shade200),
             const SizedBox(height: 8),
-            _billRow(
-                "Total Payable",
+            _billRow("Total Payable",
                 "₹${widget.total.toStringAsFixed(2)}",
                 isBold: true),
           ]),
@@ -608,9 +580,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
         Text(label,
             style: TextStyle(
                 fontSize: 14,
-                color: isDark
-                    ? Colors.grey.shade300
-                    : Colors.black54,
+                color:
+                    isDark ? Colors.grey.shade300 : Colors.black54,
                 fontWeight:
                     isBold ? FontWeight.bold : FontWeight.normal)),
         const Spacer(),
@@ -693,12 +664,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
       onTap: () => setState(() => _method = value),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        padding: const EdgeInsets.symmetric(
+            horizontal: 14, vertical: 13),
         decoration: BoxDecoration(
           color: sel
-              ? AppColors.primary
-                  .withOpacity(isDark ? 0.15 : 0.05)
+              ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.05)
               : (isDark
                   ? const Color(0xFF0F172A)
                   : Colors.white),
@@ -742,8 +712,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             height: 22,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color:
-                  sel ? AppColors.primary : Colors.transparent,
+              color: sel ? AppColors.primary : Colors.transparent,
               border: Border.all(
                   color: sel
                       ? AppColors.primary
@@ -778,8 +747,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
               : null,
           boxShadow: [
             BoxShadow(
-              color: Colors.black
-                  .withOpacity(isDark ? 0.4 : 0.08),
+              color:
+                  Colors.black.withOpacity(isDark ? 0.4 : 0.08),
               blurRadius: 16,
               offset: const Offset(0, -4),
             )
@@ -799,8 +768,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           color: Colors.grey,
                           decoration: TextDecoration.lineThrough,
                           decorationColor: Colors.grey)),
-                Text(
-                    "₹${widget.total.toStringAsFixed(0)}",
+                Text("₹${widget.total.toStringAsFixed(0)}",
                     style: TextStyle(
                         fontSize: 26,
                         fontWeight: FontWeight.bold,
@@ -824,7 +792,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   gradient: _method == null
                       ? LinearGradient(colors: [
                           Colors.grey.shade400,
-                          Colors.grey.shade400
+                          Colors.grey.shade400,
                         ])
                       : AppColors.gradient,
                   borderRadius: BorderRadius.circular(16),
@@ -844,7 +812,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           width: 22,
                           height: 22,
                           child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2))
+                              color: Colors.white,
+                              strokeWidth: 2))
                       : Row(
                           mainAxisAlignment:
                               MainAxisAlignment.center,
