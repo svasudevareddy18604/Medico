@@ -6,16 +6,13 @@ const transporter = require("../config/mailer");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
 // ── Cashfree config ──────────────────────────────────────────────────────────
-// Respects CASHFREE_ENV=SANDBOX|PRODUCTION (preferred over NODE_ENV)
 const IS_SANDBOX = (process.env.CASHFREE_ENV || "SANDBOX").toUpperCase() !== "PRODUCTION";
 const CF_BASE = IS_SANDBOX
   ? "https://sandbox.cashfree.com/pg"
   : "https://api.cashfree.com/pg";
 
-// Hosted checkout page — different domain for sandbox vs production
-const CF_CHECKOUT_BASE = "https://payments.cashfree.com/order"; // production hosted checkout
+const CF_CHECKOUT_BASE = "https://payments.cashfree.com/order";
 
-// LOG credentials on startup so you can see if they're missing
 console.log("🔑 Cashfree ENV check:", {
   CASHFREE_ENV: process.env.CASHFREE_ENV || "(not set → defaulting to SANDBOX)",
   base: CF_BASE,
@@ -28,7 +25,7 @@ console.log("🔑 Cashfree ENV check:", {
 const CF_HEADERS = () => ({
   "x-client-id":     process.env.CASHFREE_APP_ID,
   "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-  "x-api-version":   "2023-08-01",
+  "x-api-version":   "2025-01-01",
   "Content-Type":    "application/json",
 });
 
@@ -42,7 +39,6 @@ router.post("/create-order", async (req, res) => {
 
   if (!amount || Number(amount) <= 0) return err(res, "Invalid amount", 400);
 
-  // Validate credentials before calling Cashfree
   if (!process.env.CASHFREE_APP_ID || !process.env.CASHFREE_SECRET_KEY) {
     console.error("❌ Cashfree credentials missing in environment variables!");
     return err(res, "Payment gateway not configured");
@@ -50,8 +46,8 @@ router.post("/create-order", async (req, res) => {
 
   const orderId = `order_${Date.now()}`;
   const payload = {
-    order_id:     orderId,
-    order_amount: Number(amount),
+    order_id:       orderId,
+    order_amount:   Number(amount),
     order_currency: "INR",
     customer_details: {
       customer_id:    String(customer_id),
@@ -59,7 +55,9 @@ router.post("/create-order", async (req, res) => {
       customer_email: customer_email || "user@medico.in",
       customer_phone: customer_phone || "9999999999",
     },
-    order_meta: {},
+    order_meta: {
+      return_url: `https://medico-1-qk02.onrender.com/api/payment/return?order_id={order_id}`,
+    },
   };
 
   console.log("📤 Cashfree request →", CF_BASE, JSON.stringify(payload));
@@ -69,19 +67,16 @@ router.post("/create-order", async (req, res) => {
       headers: CF_HEADERS(),
     });
 
+    console.log("🔴 RAW CASHFREE RESPONSE:", JSON.stringify(response.data));
+
     const { payment_session_id, order_id } = response.data;
-    console.log("✅ Cashfree order created →", { order_id, payment_session_id: payment_session_id?.slice(0, 10) + "…" });
 
     if (!payment_session_id) {
       console.error("❌ No payment_session_id in Cashfree response:", response.data);
       return err(res, "No payment session returned by gateway");
     }
 
-    // Build the correct hosted checkout URL (sandbox vs production differ)
-    const cleanSessionId = payment_session_id.replace(/paymentpayment$/, "").replace(/payment$/, "");
-const payment_url = `${CF_CHECKOUT_BASE}/#${cleanSessionId}`;
-
-return ok(res, "Order created", { payment_session_id: cleanSessionId, order_id, payment_url });
+    const payment_url = `${CF_CHECKOUT_BASE}/#${payment_session_id}`;
     console.log("🔗 Checkout URL:", payment_url);
 
     return ok(res, "Order created", { payment_session_id, order_id, payment_url });
@@ -89,11 +84,9 @@ return ok(res, "Order created", { payment_session_id: cleanSessionId, order_id, 
     const cfErr = e.response?.data;
     console.error("❌ CREATE ORDER ERROR:", cfErr || e.message);
     console.error("   Status:", e.response?.status);
-    console.error("   Headers sent:", JSON.stringify(CF_HEADERS()).replace(/"x-client-secret":"[^"]+"/,'x-client-secret":"***"'));
 
     if (cfErr?.code === "authentication_error") {
       console.error("👉 FIX: Check CASHFREE_APP_ID and CASHFREE_SECRET_KEY in your .env");
-      console.error("👉 Sandbox creds won't work in production and vice-versa.");
     }
     return err(res, "Order creation failed");
   }
@@ -116,10 +109,9 @@ router.post("/verify", async (req, res) => {
 
     if (status !== "PAID") {
       console.log("⚠️ Payment not PAID, status:", status);
-      return ok(res, "Payment not completed", { paid: false });  // success:true so Flutter knows we reached Cashfree
+      return ok(res, "Payment not completed", { paid: false });
     }
 
-    // Only update DB if we have a real order_id
     if (order_id && order_id !== 0) {
       await db.query(
         `UPDATE orders SET payment_id=?, status='CONFIRMED', payment_status='PAID' WHERE id=?`,
@@ -129,7 +121,6 @@ router.post("/verify", async (req, res) => {
 
     ok(res, "Payment verified", { paid: true });
 
-    // Async: notify caretakers
     setImmediate(async () => {
       try {
         if (!order_id || order_id === 0) return;
