@@ -1,6 +1,6 @@
 class Api {
-  static const String baseUrl   = "https://medico-3vyh.onrender.com/api";
-  static const String imageBase = "https://medico-3vyh.onrender.com";
+  static const String baseUrl   = "https://medico-1-qk02.onrender.com/api";
+  static const String imageBase = "https://medico-1-qk02.onrender.com";
 
   static const String login    = "$baseUrl/auth/login";
   static const String register = "$baseUrl/auth/register";

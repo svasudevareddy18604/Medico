@@ -4,7 +4,7 @@
     <!-- INTERNET -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
-    <!-- NOTIFICATIONS (Android 13+) -->
+    <!-- NOTIFICATIONS -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- LOCATION -->
@@ -26,27 +26,29 @@
     <uses-permission android:name="android.permission.CAMERA"/>
 
     <application
-        android:label="medico"
         android:name="${applicationName}"
+        android:label="medico"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
-        <!-- Razorpay -->
+        <!-- CASHFREE -->
         <meta-data
-            android:name="com.razorpay.ApiKey"
-            android:value="rzp_test_SZiKwlbHFu7784"/>
+            android:name="com.cashfree.pg.apiKey"
+            android:value="TEST110658581289d0bb044671cf744285856011"/>
 
-        <!-- Firebase push notification service -->
+        <!-- FIREBASE -->
         <service
             android:name="com.google.firebase.messaging.FirebaseMessagingService"
             android:exported="false">
+
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT"/>
             </intent-filter>
+
         </service>
 
-        <!-- Main activity -->
+        <!-- MAIN ACTIVITY -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -57,30 +59,42 @@
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
 
+            <!-- FLUTTER NORMAL THEME -->
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
 
             <intent-filter>
+
                 <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+
+                <category
+                    android:name="android.intent.category.LAUNCHER"/>
+
             </intent-filter>
 
         </activity>
 
-        <!-- Flutter embedding -->
+        <!-- FLUTTER EMBEDDING -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
 
     </application>
 
-    <!-- Required for text plugins -->
+    <!-- REQUIRED FOR TEXT PROCESSING -->
     <queries>
+
         <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT"/>
-            <data android:mimeType="text/plain"/>
+
+            <action
+                android:name="android.intent.action.PROCESS_TEXT"/>
+
+            <data
+                android:mimeType="text/plain"/>
+
         </intent>
+
     </queries>
 
 </manifest>

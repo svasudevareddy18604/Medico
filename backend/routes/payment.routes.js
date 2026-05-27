@@ -1,20 +1,22 @@
 const express = require("express");
-const Razorpay = require("razorpay");
-const crypto = require("crypto");
 const router = express.Router();
+
+const { Cashfree, CFEnvironment } = require("cashfree-pg");
 
 const db = require("../config/db");
 const transporter = require("../config/mailer");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
 /* =====================================================
-   RAZORPAY CONFIG
+   CASHFREE CONFIG
 ===================================================== */
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
-});
+Cashfree.XClientId = process.env.CASHFREE_APP_ID;
+Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
+Cashfree.XEnvironment =
+  process.env.NODE_ENV === "production"
+    ? CFEnvironment.PRODUCTION
+    : CFEnvironment.SANDBOX;
 
 /* =====================================================
    COMMON RESPONSE
@@ -25,69 +27,76 @@ const sendResponse = (res, success, message, data = {}) => {
 };
 
 /* =====================================================
-   CREATE RAZORPAY ORDER
+   CREATE CASHFREE ORDER
 ===================================================== */
 
 router.post("/create-order", async (req, res) => {
   try {
-    const { amount } = req.body;
+    const {
+      amount,
+      customer_id,
+      customer_name,
+      customer_email,
+      customer_phone
+    } = req.body;
 
     if (!amount || amount <= 0) {
       return sendResponse(res, false, "Invalid amount");
     }
 
-    const order = await razorpay.orders.create({
-      amount: amount,
-      currency: "INR",
-      receipt: "rcpt_" + Date.now()
-    });
+    const orderId = "order_" + Date.now();
+
+    const request = {
+      order_amount: Number(amount),
+      order_currency: "INR",
+      order_id: orderId,
+      customer_details: {
+        customer_id: String(customer_id),
+        customer_name,
+        customer_email,
+        customer_phone
+      },
+      order_meta: {
+        return_url:
+          "https://yourdomain.com/payment-success?order_id={order_id}"
+      }
+    };
+
+    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
 
     return sendResponse(res, true, "Order created", {
-      key: process.env.RAZORPAY_KEY_ID,
-      order
+      payment_session_id: response.data.payment_session_id,
+      order_id: orderId
     });
-
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false });
+    return res.status(500).json({ success: false, message: "Order creation failed" });
   }
 });
 
 /* =====================================================
-   VERIFY RAZORPAY PAYMENT (ONLINE)
+   VERIFY CASHFREE PAYMENT (ONLINE)
 ===================================================== */
 
 router.post("/verify", async (req, res) => {
   try {
+    const { cashfree_order_id, order_id, fcm_token } = req.body;
 
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      order_id,
-      fcm_token
-    } = req.body;
+    const response = await Cashfree.PGFetchOrder("2023-08-01", cashfree_order_id);
 
-    /* ===== SIGNATURE VERIFY ===== */
+    const orderStatus = response.data.order_status;
 
-    const body = razorpay_order_id + "|" + razorpay_payment_id;
-
-    const expected = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(body)
-      .digest("hex");
-
-    if (expected !== razorpay_signature) {
-      return sendResponse(res, false, "Invalid payment");
+    if (orderStatus !== "PAID") {
+      return sendResponse(res, false, "Payment not completed");
     }
 
-    /* ===== UPDATE ORDER (ONLINE = PAID) ===== */
+    /* ===== UPDATE ORDER ===== */
 
     await db.query(
       `UPDATE orders 
        SET payment_id=?, status='CONFIRMED', payment_status='PAID' 
        WHERE id=?`,
-      [razorpay_payment_id, order_id]
+      [cashfree_order_id, order_id]
     );
 
     /* ===== GET ORDER DETAILS ===== */
@@ -97,7 +106,7 @@ router.post("/verify", async (req, res) => {
       [order_id]
     );
 
-    const { latitude: lat, longitude: lng, category } = order;
+    const { latitude: lat, longitude: lng } = order;
 
     /* ===== GET RADIUS ===== */
 
@@ -114,8 +123,7 @@ router.post("/verify", async (req, res) => {
       SELECT u.fcm_token, u.email
       FROM users u
       JOIN caretaker_profiles cp ON cp.user_id = u.id
-      WHERE u.role='caretaker'
-      
+      WHERE u.role = 'caretaker'
       AND (
         6371 * acos(
           cos(radians(?)) *
@@ -126,7 +134,7 @@ router.post("/verify", async (req, res) => {
         )
       ) <= ?
       `,
-      [category, lat, lng, lat, radius]
+      [lat, lng, lat, radius]
     );
 
     sendResponse(res, true, "Payment verified");
@@ -135,7 +143,6 @@ router.post("/verify", async (req, res) => {
 
     setImmediate(async () => {
       try {
-
         await Promise.all([
           ...caretakers
             .filter(c => c.fcm_token)
@@ -167,12 +174,10 @@ router.post("/verify", async (req, res) => {
         }
 
         console.log("✅ Notifications sent");
-
       } catch (err) {
         console.error("Notification error:", err);
       }
     });
-
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false });
@@ -180,15 +185,13 @@ router.post("/verify", async (req, res) => {
 });
 
 /* =====================================================
-   COD BOOKING (🔥 FIXED HERE)
+   COD BOOKING
 ===================================================== */
 
 router.post("/cod-notification", async (req, res) => {
   try {
-
     const { order_id, fcm_token } = req.body;
 
-    /* ✅ IMPORTANT FIX */
     await db.query(
       `UPDATE orders 
        SET status='CONFIRMED', payment_status='PENDING' 
@@ -207,7 +210,6 @@ router.post("/cod-notification", async (req, res) => {
         );
       }
     });
-
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false });
@@ -220,7 +222,6 @@ router.post("/cod-notification", async (req, res) => {
 
 router.post("/confirm-payment", async (req, res) => {
   try {
-
     const { order_id } = req.body;
 
     await db.query(
@@ -229,7 +230,6 @@ router.post("/confirm-payment", async (req, res) => {
     );
 
     return sendResponse(res, true, "Payment confirmed");
-
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false });
@@ -242,7 +242,6 @@ router.post("/confirm-payment", async (req, res) => {
 
 router.post("/complete-order", async (req, res) => {
   try {
-
     const { order_id } = req.body;
 
     await db.query(
@@ -251,7 +250,6 @@ router.post("/complete-order", async (req, res) => {
     );
 
     return sendResponse(res, true, "Service completed");
-
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false });
