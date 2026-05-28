@@ -14,29 +14,49 @@ const CF_BASE = IS_SANDBOX
   : "https://api.cashfree.com/pg";
 
 console.log("🔑 Cashfree ENV:", {
-  env: process.env.CASHFREE_ENV || "(not set → SANDBOX)",
-  base: CF_BASE,
+  env:    process.env.CASHFREE_ENV || "(not set → SANDBOX)",
+  base:   CF_BASE,
   app_id: process.env.CASHFREE_APP_ID
-    ? `${process.env.CASHFREE_APP_ID.slice(0, 6)}…`
-    : "❌ MISSING",
+    ? `${process.env.CASHFREE_APP_ID.slice(0, 6)}…` : "❌ MISSING",
   secret: process.env.CASHFREE_SECRET_KEY
-    ? `${process.env.CASHFREE_SECRET_KEY.slice(0, 4)}…`
-    : "❌ MISSING",
+    ? `${process.env.CASHFREE_SECRET_KEY.slice(0, 4)}…` : "❌ MISSING",
 });
 
 // ── HEADERS ───────────────────────────────────────────────────────────────────
+// "2022-09-01" avoids the Cashfree sandbox "paymentpayment" suffix bug
+// that exists in newer API versions on sandbox only.
 const CF_HEADERS = () => ({
   "x-client-id":     process.env.CASHFREE_APP_ID,
   "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-  "x-api-version":   "2023-08-01",          // stable, widely supported
+  "x-api-version":   "2022-09-01",
   "Content-Type":    "application/json",
 });
 
-// ── RESPONSE HELPERS ──────────────────────────────────────────────────────────
+// ── HELPERS ───────────────────────────────────────────────────────────────────
 const ok  = (res, msg, data = {}) =>
   res.json({ success: true,  message: msg, ...data });
 const err = (res, msg, status = 500) =>
   res.status(status).json({ success: false, message: msg });
+
+/**
+ * CASHFREE SANDBOX BUG — confirmed from your logs:
+ *
+ *   Raw:   session_xxx_Apaymentpayment
+ *   Clean: session_xxx_A
+ *
+ * Cashfree sandbox (NOT production) appends "payment" or "paymentpayment"
+ * to session IDs when using API versions >= 2023-xx-xx.
+ * Switching to "2022-09-01" usually prevents it, but we also strip as
+ * a safety net in case sandbox still misbehaves.
+ *
+ * This function is a NO-OP in production (IS_SANDBOX = false).
+ */
+function sanitizeSessionId(raw) {
+  if (!IS_SANDBOX) return raw;
+  return raw
+    .replace(/paymentpayment$/i, "")
+    .replace(/payment$/i, "");
+}
 
 // ── CREATE ORDER ──────────────────────────────────────────────────────────────
 router.post("/create-order", async (req, res) => {
@@ -54,7 +74,6 @@ router.post("/create-order", async (req, res) => {
     return err(res, "Payment gateway not configured");
   }
 
-  // Unique order ID — keep it under 50 chars (Cashfree limit)
   const orderId = `order_${Date.now()}`;
 
   const payload = {
@@ -67,14 +86,10 @@ router.post("/create-order", async (req, res) => {
       customer_email: customer_email || "user@medico.in",
       customer_phone: customer_phone || "9999999999",
     },
-    order_meta: {
-      // Optional: set return/notify URLs here if you use redirect flow
-      // return_url: "https://yourdomain.com/payment-return?order_id={order_id}",
-      // notify_url: "https://yourdomain.com/api/payment/webhook",
-    },
+    order_meta: {},
   };
 
-  console.log("📤 Cashfree request →", CF_BASE, JSON.stringify(payload));
+  console.log("📤 Cashfree payload →", JSON.stringify(payload));
 
   try {
     const response = await axios.post(`${CF_BASE}/orders`, payload, {
@@ -83,29 +98,29 @@ router.post("/create-order", async (req, res) => {
 
     console.log("✅ Cashfree raw response:", JSON.stringify(response.data));
 
-    const { payment_session_id, order_id } = response.data;
+    const { payment_session_id: rawSession, order_id } = response.data;
 
-    // ── CRITICAL: NEVER modify payment_session_id ─────────────────────────
-    // It is a cryptographic token. Any trimming/replacing breaks it entirely.
-    if (!payment_session_id) {
+    if (!rawSession) {
       console.error("❌ No payment_session_id in response:", response.data);
       return err(res, "Payment gateway did not return a session. Check credentials.");
     }
 
-    // The Flutter SDK (cashfree_pg) uses payment_session_id directly.
-    // If opening in browser, Cashfree's checkout URL format is:
-    //   sandbox : https://sandbox.cashfree.com/checkout/post/pay?sessionId=<SESSION>
-    //   prod    : https://checkout.cashfree.com/post/pay?sessionId=<SESSION>
+    // Strip sandbox suffix bug (NO-OP in production)
+    const payment_session_id = sanitizeSessionId(rawSession);
+
+    console.log("🔑 Raw session   :", rawSession);
+    console.log("🔑 Clean session :", payment_session_id);
+    console.log("🔑 Stripped chars:", rawSession.length - payment_session_id.length);
+
     const checkoutBase = IS_SANDBOX
       ? "https://sandbox.cashfree.com/checkout/post/pay"
       : "https://checkout.cashfree.com/post/pay";
 
     const payment_url = `${checkoutBase}?sessionId=${payment_session_id}`;
-
-    console.log("🔗 Checkout URL:", payment_url);
+    console.log("🔗 Payment URL:", payment_url);
 
     return ok(res, "Order created", {
-      payment_session_id, // raw, untouched
+      payment_session_id,
       order_id,
       payment_url,
     });
@@ -113,12 +128,10 @@ router.post("/create-order", async (req, res) => {
     const cfErr = e.response?.data;
     console.error("❌ CREATE ORDER ERROR:", cfErr || e.message);
 
-    if (cfErr?.code === "authentication_error") {
+    if (cfErr?.code === "authentication_error")
       console.error("👉 Check CASHFREE_APP_ID and CASHFREE_SECRET_KEY in .env");
-    }
-    if (cfErr?.code === "rate_limit_error") {
-      console.error("👉 Too many requests — back off and retry");
-    }
+    if (cfErr?.code === "rate_limit_error")
+      console.error("👉 Too many requests — slow down");
 
     return err(res, cfErr?.message || "Order creation failed");
   }
@@ -142,11 +155,10 @@ router.post("/verify", async (req, res) => {
     console.log("📊 Cashfree order status:", status);
 
     if (status !== "PAID") {
-      console.log("⚠️ Payment not PAID, status:", status);
+      console.log("⚠️ Not PAID — status:", status);
       return ok(res, "Payment not completed", { paid: false, status });
     }
 
-    // Update DB only when a real order_id is given
     if (order_id && order_id !== 0) {
       await db.query(
         `UPDATE orders
@@ -156,17 +168,16 @@ router.post("/verify", async (req, res) => {
       );
     }
 
-    // Respond immediately, then send notifications in background
     ok(res, "Payment verified", { paid: true });
 
     setImmediate(async () => {
       try {
         if (!order_id || order_id === 0) return;
 
-        const [[order]]   = await db.query(
+        const [[order]]    = await db.query(
           "SELECT latitude, longitude FROM orders WHERE id = ?", [order_id]
         );
-        const [[setting]] = await db.query(
+        const [[setting]]  = await db.query(
           "SELECT radius_km FROM settings LIMIT 1"
         );
         const [caretakers] = await db.query(
@@ -185,18 +196,16 @@ router.post("/verify", async (req, res) => {
         await Promise.all([
           ...caretakers
             .filter(c => c.fcm_token)
-            .map(c =>
-              sendPushNotification(c.fcm_token, "New Care Request", "New booking near you")
-            ),
+            .map(c => sendPushNotification(
+              c.fcm_token, "New Care Request", "New booking near you"
+            )),
           ...caretakers
             .filter(c => c.email)
-            .map(c =>
-              transporter.sendMail({
-                to: c.email,
-                subject: "New Booking",
-                text: "A new care request has been placed near you.",
-              })
-            ),
+            .map(c => transporter.sendMail({
+              to: c.email,
+              subject: "New Booking",
+              text: "A new care request has been placed near you.",
+            })),
         ]);
 
         if (fcm_token) {
@@ -210,6 +219,7 @@ router.post("/verify", async (req, res) => {
         console.error("⚠️ Notification error:", e.message);
       }
     });
+
   } catch (e) {
     console.error("❌ VERIFY ERROR:", e.response?.data || e.message);
     return err(res, "Verification failed");
