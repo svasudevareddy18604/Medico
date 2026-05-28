@@ -1,16 +1,12 @@
 name: medico
-
 description: Medico Healthcare App
-
 publish_to: 'none'
-
 version: 1.0.0+1
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
-
   flutter:
     sdk: flutter
 
@@ -40,8 +36,7 @@ dependencies:
   flutter_map: ^7.0.0
   latlong2: ^0.9.0
 
-  # Payment / Browser Launch
-  url_launcher: ^6.2.5
+  # Payment — Cashfree official Flutter SDK
 
   # Optional WebView
   webview_flutter: ^4.7.0
@@ -56,32 +51,23 @@ dependencies:
   firebase_core: ^2.32.0
   firebase_messaging: ^14.9.4
   flutter_local_notifications: ^17.2.1
+  flutter_cashfree_pg_sdk: ^2.4.0+52
+  url_launcher: ^6.3.2
 
 dev_dependencies:
-
   flutter_test:
     sdk: flutter
-
   flutter_lints: ^6.0.0
-
   flutter_launcher_icons: ^0.14.4
 
 flutter_launcher_icons:
-
   android: true
-
   ios: true
-
   image_path: assets/logo.png
-
   min_sdk_android: 21
 
 flutter:
-
   uses-material-design: true
-
   assets:
-
     - assets/logo.png
-
     - assets/cashfree.png

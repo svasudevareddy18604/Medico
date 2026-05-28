@@ -23,10 +23,12 @@ console.log("🔑 Cashfree ENV:", {
 });
 
 // ── HEADERS ───────────────────────────────────────────────────────────────────
+// IMPORTANT: Flutter SDK requires x-api-version "2023-08-01"
+// Using "2022-09-01" causes "token is not present" error in the SDK
 const CF_HEADERS = () => ({
   "x-client-id":     process.env.CASHFREE_APP_ID,
   "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-  "x-api-version":   "2022-09-01",
+  "x-api-version":   "2023-08-01",
   "Content-Type":    "application/json",
 });
 
@@ -35,24 +37,6 @@ const ok  = (res, msg, data = {}) =>
   res.json({ success: true, message: msg, ...data });
 const err = (res, msg, status = 500) =>
   res.status(status).json({ success: false, message: msg });
-
-/**
- * HOW CASHFREE CHECKOUT ACTUALLY WORKS
- * ─────────────────────────────────────
- * The payment_session_id is ONLY for the Cashfree JS SDK / Flutter SDK.
- * It is NOT a URL path segment — passing it as a URL always 404s or errors.
- *
- * The correct browser redirect checkout URL uses the ORDER ID:
- *
- *   SANDBOX : https://sandbox.cashfree.com/pg/orders/pay/{order_id}
- *   PROD    : https://payments.cashfree.com/order/{order_id}
- *
- * BUT — this requires a return_url set in order_meta so Cashfree knows
- * where to redirect after payment. We set it to a deep-link back to the app.
- *
- * The payment_session_id is still returned so you can optionally use
- * the Flutter Cashfree SDK (cashfree_pg package) as an alternative.
- */
 
 // ── CREATE ORDER ──────────────────────────────────────────────────────────────
 router.post("/create-order", async (req, res) => {
@@ -72,11 +56,6 @@ router.post("/create-order", async (req, res) => {
 
   const orderId = `order_${Date.now()}`;
 
-  // Deep-link return URL — Cashfree redirects here after payment.
-  // The app must have this scheme registered in AndroidManifest / Info.plist.
-  // Format: medico://payment?order_id=<ORDER_ID>&status=SUCCESS|FAILED
-  const returnUrl = `medico://payment?order_id=${orderId}`;
-
   const payload = {
     order_id:       orderId,
     order_amount:   Number(amount),
@@ -88,8 +67,10 @@ router.post("/create-order", async (req, res) => {
       customer_phone: customer_phone || "9999999999",
     },
     order_meta: {
-      // Required for browser-redirect flow — Cashfree sends user back here
-      return_url: returnUrl,
+      // Deep-link: Cashfree redirects here after UPI/netbanking browser flows
+      return_url: `medico://payment?order_id=${orderId}`,
+      // notify_url is optional — add your webhook URL here if needed
+      // notify_url: "https://your-backend.com/api/payment/webhook",
     },
   };
 
@@ -102,33 +83,25 @@ router.post("/create-order", async (req, res) => {
 
     console.log("✅ Cashfree raw response:", JSON.stringify(response.data));
 
-    const { payment_session_id: rawSession, order_id } = response.data;
+    const { payment_session_id, order_id } = response.data;
 
-    if (!rawSession) {
-      console.error("❌ No payment_session_id:", response.data);
+    if (!payment_session_id) {
+      console.error("❌ No payment_session_id in response:", response.data);
       return err(res, "Payment gateway did not return a session. Check credentials.");
     }
 
-    // Strip the Cashfree sandbox bug suffix — NO-OP in production
-    const payment_session_id = IS_SANDBOX
-      ? rawSession.replace(/paymentpayment$/i, "").replace(/payment$/i, "")
-      : rawSession;
-
-    console.log("🔑 Raw session   :", rawSession);
-    console.log("🔑 Clean session :", payment_session_id);
-
-    // ── CORRECT checkout URLs ─────────────────────────────────────────────
-    // Sandbox and production both use order_id (not session_id) for browser flow.
+    // Build the browser-redirect checkout URL using order_id (not session_id)
     const payment_url = IS_SANDBOX
       ? `https://sandbox.cashfree.com/pg/orders/pay/${order_id}`
       : `https://payments.cashfree.com/order/${order_id}`;
 
+    console.log("🔑 Session ID    :", payment_session_id);
     console.log("🔗 Payment URL   :", payment_url);
 
     return ok(res, "Order created", {
-      payment_session_id, // for SDK use
+      payment_session_id,  // used by Flutter SDK
       order_id,
-      payment_url,        // for browser redirect use
+      payment_url,         // used for browser redirect (optional)
     });
 
   } catch (e) {

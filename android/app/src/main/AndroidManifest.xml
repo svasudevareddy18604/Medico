@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.medico">
 
-    <!-- INTERNET -->
+    <!-- INTERNET (required by cashfree_pg) -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- NOTIFICATIONS -->
@@ -13,11 +13,9 @@
 
     <!-- IMAGE PICKER -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
-
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
@@ -32,23 +30,20 @@
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
-        <!-- CASHFREE -->
+        <!-- CASHFREE API KEY (sandbox) -->
         <meta-data
             android:name="com.cashfree.pg.apiKey"
             android:value="TEST110658581289d0bb044671cf744285856011"/>
 
-        <!-- FIREBASE -->
+        <!-- FIREBASE MESSAGING -->
         <service
             android:name="com.google.firebase.messaging.FirebaseMessagingService"
             android:exported="false">
-
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT"/>
             </intent-filter>
-
         </service>
 
-        <!-- MAIN ACTIVITY -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -59,7 +54,6 @@
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
 
-            <!-- FLUTTER NORMAL THEME -->
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
@@ -70,8 +64,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- CASHFREE DEEP LINK RETURN -->
-            <intent-filter>
+            <!--
+                CASHFREE DEEP LINK — keeps the SDK payment sheet
+                able to return to your app after UPI / netbanking redirects.
+                Scheme "medico" must match what you register in Cashfree dashboard.
+            -->
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
@@ -80,21 +78,26 @@
 
         </activity>
 
-        <!-- FLUTTER EMBEDDING -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
 
     </application>
 
-    <!-- REQUIRED FOR TEXT PROCESSING -->
     <queries>
-
+        <!-- Required for ML Kit text processing -->
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-
+        <!--
+            Required so cashfree_pg can query installed UPI apps
+            (PhonePe, GPay, Paytm, etc.) on Android 11+
+        -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="upi"/>
+        </intent>
     </queries>
 
 </manifest>
