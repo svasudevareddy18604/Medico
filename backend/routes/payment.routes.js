@@ -37,31 +37,22 @@ const err = (res, msg, status = 500) =>
   res.status(status).json({ success: false, message: msg });
 
 /**
- * Strip the Cashfree sandbox bug suffix ("paymentpayment" / "payment")
- * appended to payment_session_id. This is a NO-OP in production.
- */
-function sanitizeSessionId(raw) {
-  if (!IS_SANDBOX) return raw;
-  return raw
-    .replace(/paymentpayment$/i, "")
-    .replace(/payment$/i, "");
-}
-
-/**
- * Build the correct Cashfree checkout URL.
+ * HOW CASHFREE CHECKOUT ACTUALLY WORKS
+ * ─────────────────────────────────────
+ * The payment_session_id is ONLY for the Cashfree JS SDK / Flutter SDK.
+ * It is NOT a URL path segment — passing it as a URL always 404s or errors.
  *
- * SANDBOX : https://sandbox.cashfree.com/pg/view/orders/{sessionId}
- * PROD    : https://payments.cashfree.com/order/{sessionId}
+ * The correct browser redirect checkout URL uses the ORDER ID:
  *
- * The "/checkout/post/pay?sessionId=..." path returns 404 on sandbox.
- * The "/pg/view/orders/{session}" path is the working sandbox checkout.
+ *   SANDBOX : https://sandbox.cashfree.com/pg/orders/pay/{order_id}
+ *   PROD    : https://payments.cashfree.com/order/{order_id}
+ *
+ * BUT — this requires a return_url set in order_meta so Cashfree knows
+ * where to redirect after payment. We set it to a deep-link back to the app.
+ *
+ * The payment_session_id is still returned so you can optionally use
+ * the Flutter Cashfree SDK (cashfree_pg package) as an alternative.
  */
-function buildPaymentUrl(sessionId) {
-  if (IS_SANDBOX) {
-    return `https://sandbox.cashfree.com/pg/view/orders/${sessionId}`;
-  }
-  return `https://payments.cashfree.com/order/${sessionId}`;
-}
 
 // ── CREATE ORDER ──────────────────────────────────────────────────────────────
 router.post("/create-order", async (req, res) => {
@@ -81,6 +72,11 @@ router.post("/create-order", async (req, res) => {
 
   const orderId = `order_${Date.now()}`;
 
+  // Deep-link return URL — Cashfree redirects here after payment.
+  // The app must have this scheme registered in AndroidManifest / Info.plist.
+  // Format: medico://payment?order_id=<ORDER_ID>&status=SUCCESS|FAILED
+  const returnUrl = `medico://payment?order_id=${orderId}`;
+
   const payload = {
     order_id:       orderId,
     order_amount:   Number(amount),
@@ -91,7 +87,10 @@ router.post("/create-order", async (req, res) => {
       customer_email: customer_email || "user@medico.in",
       customer_phone: customer_phone || "9999999999",
     },
-    order_meta: {},
+    order_meta: {
+      // Required for browser-redirect flow — Cashfree sends user back here
+      return_url: returnUrl,
+    },
   };
 
   console.log("📤 Cashfree payload →", JSON.stringify(payload));
@@ -106,23 +105,32 @@ router.post("/create-order", async (req, res) => {
     const { payment_session_id: rawSession, order_id } = response.data;
 
     if (!rawSession) {
-      console.error("❌ No payment_session_id in response:", response.data);
+      console.error("❌ No payment_session_id:", response.data);
       return err(res, "Payment gateway did not return a session. Check credentials.");
     }
 
-    const payment_session_id = sanitizeSessionId(rawSession);
-    const payment_url        = buildPaymentUrl(payment_session_id);
+    // Strip the Cashfree sandbox bug suffix — NO-OP in production
+    const payment_session_id = IS_SANDBOX
+      ? rawSession.replace(/paymentpayment$/i, "").replace(/payment$/i, "")
+      : rawSession;
 
     console.log("🔑 Raw session   :", rawSession);
     console.log("🔑 Clean session :", payment_session_id);
-    console.log("🔑 Stripped chars:", rawSession.length - payment_session_id.length);
+
+    // ── CORRECT checkout URLs ─────────────────────────────────────────────
+    // Sandbox and production both use order_id (not session_id) for browser flow.
+    const payment_url = IS_SANDBOX
+      ? `https://sandbox.cashfree.com/pg/orders/pay/${order_id}`
+      : `https://payments.cashfree.com/order/${order_id}`;
+
     console.log("🔗 Payment URL   :", payment_url);
 
     return ok(res, "Order created", {
-      payment_session_id,
+      payment_session_id, // for SDK use
       order_id,
-      payment_url,
+      payment_url,        // for browser redirect use
     });
+
   } catch (e) {
     const cfErr = e.response?.data;
     console.error("❌ CREATE ORDER ERROR:", cfErr || e.message);
