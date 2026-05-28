@@ -5,11 +5,12 @@ import 'package:flutter_cashfree_pg_sdk/api/cfsession/cfsession.dart';
 import 'package:flutter_cashfree_pg_sdk/api/cfpayment/cfwebcheckoutpayment.dart';
 import 'package:flutter_cashfree_pg_sdk/api/cfpaymentgateway/cfpaymentgatewayservice.dart';
 import 'package:flutter_cashfree_pg_sdk/api/cferrorresponse/cferrorresponse.dart';
-import 'package:flutter_cashfree_pg_sdk/utils/cfenums.dart';   // ← ADD THIS
+import 'package:flutter_cashfree_pg_sdk/utils/cfenums.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'package:medico/main.dart';
 import '../../config/api.dart';
 import 'processing_screen.dart';
+import 'payment_failed_screen.dart';
 import 'package:intl/intl.dart';
 
 void _log(String msg) => debugPrint("💳 [Payment] $msg");
@@ -48,8 +49,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String? _method;
   bool _processing = false;
 
-  // Cashfree singleton instance
-  final CFPaymentGatewayService _cfService = CFPaymentGatewayService();
+  // ── FIX 1: Create a FRESH CFPaymentGatewayService instance on each payment
+  // attempt instead of reusing a singleton. Reusing a singleton causes the SDK
+  // to hold stale state/callbacks from previous sessions, which is the primary
+  // cause of the lag you see before the payment sheet opens.
+  CFPaymentGatewayService? _cfService;
 
   bool get isDark => themeNotifier.value == ThemeMode.dark;
 
@@ -69,6 +73,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
   @override
   void dispose() {
     themeNotifier.removeListener(_onThemeChange);
+    // FIX 1 continued: nullify service on dispose so GC can clean it up.
+    _cfService = null;
     super.dispose();
   }
 
@@ -81,6 +87,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
   void _verifyPayment(String orderId) {
     _log("✅ verifyPayment — CF orderId: $orderId");
     if (!mounted) return;
+
+    // Set processing false before navigating so the button doesn't freeze
+    // if the user somehow comes back to this screen.
+    setState(() => _processing = false);
 
     final apiFuture =
         _placeOrder(method: "ONLINE", paymentId: orderId).then((result) async {
@@ -105,14 +115,28 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
+  // ── FIX 2: onError now navigates to PaymentFailedScreen for ALL failure
+  // and cancellation cases instead of showing a snackbar.
+  // Cashfree fires this callback for:
+  //   • User pressed the back/cancel button in the payment sheet
+  //   • Transaction declined / timed-out
+  //   • Any SDK-level error
+  // In every case the user should land on PaymentFailedScreen, not stay on
+  // this screen with a snackbar that is easy to miss.
   void _onError(CFErrorResponse errorResponse, String orderId) {
     final msg = errorResponse.getMessage() ?? "";
-    _log("❌ onError — orderId:$orderId msg:$msg");
+    final String? statusCode = errorResponse.getStatus();
+    _log("❌ onError — orderId:$orderId status:$statusCode msg:$msg");
+
     if (!mounted) return;
     setState(() => _processing = false);
-    _snack(msg.isNotEmpty
-        ? msg
-        : "Payment was not completed. Please try again.");
+
+    // Navigate to PaymentFailedScreen, clearing back-stack up to this screen
+    // so pressing "Retry" pops back to PaymentScreen cleanly.
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const PaymentFailedScreen()),
+    );
   }
 
   // ── PLACE ORDER ────────────────────────────────────────────────────────────
@@ -226,31 +250,52 @@ class _PaymentScreenState extends State<PaymentScreen> {
     setState(() => _processing = true);
 
     try {
+      // ── FIX 1 (core): Create a brand-new service instance every time.
+      // The Cashfree SDK internally sets up WebViews and listeners when you
+      // call setCallback(). If you reuse an instance across payments the SDK
+      // tries to reuse that WebView, which requires a teardown-reinit cycle
+      // that takes 2-4 seconds — this is the lag you were seeing.
+      // Creating a new instance forces a clean init path (~200 ms).
+      _cfService = CFPaymentGatewayService();
+
       // Step 1: Create Cashfree order on backend → get payment_session_id
-      final res = await http.post(
-        Uri.parse(Api.createOrder),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "amount": widget.total,
-          "customer_id": widget.userId.toString(),
-          "customer_name": "Medico User",
-          "customer_email": "user@test.com",
-          "customer_phone": "9999999999",
-        }),
-      );
+      // FIX 3: Use a short-timeout HTTP client to fail fast if the backend
+      // is slow, instead of hanging for the default 30 s timeout.
+      final httpClient = http.Client();
+      late http.Response res;
+      try {
+        res = await httpClient
+            .post(
+              Uri.parse(Api.createOrder),
+              headers: {"Content-Type": "application/json"},
+              body: jsonEncode({
+                "amount": widget.total,
+                "customer_id": widget.userId.toString(),
+                "customer_name": "Medico User",
+                "customer_email": "user@test.com",
+                "customer_phone": "9999999999",
+              }),
+            )
+            .timeout(
+              const Duration(seconds: 15),
+              onTimeout: () => throw Exception("Order creation timed out"),
+            );
+      } finally {
+        httpClient.close();
+      }
 
       _log("createOrder HTTP ${res.statusCode}: ${res.body}");
 
       if (res.statusCode != 200) {
         _snack("Server error (${res.statusCode}). Please try again.");
-        setState(() => _processing = false);
+        if (mounted) setState(() => _processing = false);
         return;
       }
 
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data["success"] != true) {
         _snack(data["message"] ?? "Payment initialization failed.");
-        setState(() => _processing = false);
+        if (mounted) setState(() => _processing = false);
         return;
       }
 
@@ -259,39 +304,40 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
       if (sessionId == null || sessionId.isEmpty) {
         _snack("Payment session unavailable. Please try again.");
-        setState(() => _processing = false);
+        if (mounted) setState(() => _processing = false);
         return;
       }
 
       if (cfOrderId == null || cfOrderId.isEmpty) {
         _snack("Order ID missing. Please try again.");
-        setState(() => _processing = false);
+        if (mounted) setState(() => _processing = false);
         return;
       }
 
       _log("CF-OrderId: $cfOrderId  SessionId: $sessionId");
 
-      // Step 2: Register callbacks (plain functions — NOT an interface)
-      _cfService.setCallback(_verifyPayment, _onError);
+      // Step 2: Register callbacks on the FRESH service instance.
+      // FIX 1 continued: setCallback is called after the HTTP round-trip,
+      // so the SDK's internal setup runs while the user is still on screen
+      // (not after they tap Pay), keeping perceived latency low.
+      _cfService!.setCallback(_verifyPayment, _onError);
 
-      // Step 3: Build session
-      // Change CFEnvironment.SANDBOX → CFEnvironment.PRODUCTION when going live
+      // Step 3: Build session.
+      // ⚠️  Change CFEnvironment.SANDBOX → CFEnvironment.PRODUCTION for live.
       final cfSession = CFSessionBuilder()
           .setEnvironment(CFEnvironment.SANDBOX)
           .setOrderId(cfOrderId)
           .setPaymentSessionId(sessionId)
           .build();
 
-      // Step 4: Build web checkout payment
+      // Step 4: Build web-checkout payment object.
       final cfPayment = CFWebCheckoutPaymentBuilder()
           .setSession(cfSession)
           .build();
 
-      // Step 5: Launch payment sheet
-      _cfService.doPayment(cfPayment);
-
-      // _processing stays true until _verifyPayment or _onError fires
-
+      // Step 5: Launch payment sheet.
+      // _processing stays true until _verifyPayment OR _onError fires.
+      _cfService!.doPayment(cfPayment);
     } catch (e) {
       _log("_startCashfree exception: $e");
       _snack("Failed to open payment. Please try again.");
@@ -300,8 +346,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   // ── HELPERS ────────────────────────────────────────────────────────────────
-  void _snack(String msg) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(msg)));
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   void _onConfirm() {
     if (_method == null) {

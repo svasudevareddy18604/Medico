@@ -264,7 +264,7 @@ class _ProcessingScreenState extends State<ProcessingScreen>
         ),
         const SizedBox(width: 8),
         Text(
-          widget.isCOD ? "Cash on Delivery" : "Secure Payment",
+          widget.isCOD ? "Pay after Service" : "Secure Payment",
           style: const TextStyle(color: Colors.white, fontSize: 13,
               fontWeight: FontWeight.w700, letterSpacing: 0.3)),
       ]),

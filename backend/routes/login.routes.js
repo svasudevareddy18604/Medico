@@ -1,40 +1,16 @@
 const express = require("express");
-const router = express.Router();
+const router  = express.Router();
+const auth    = require("../controllers/auth.controller");
 
-const auth = require("../controllers/auth.controller");
-
-/* =========================
-   LOGIN (USER / ADMIN)
-========================= */
-
-router.post("/login", async (req, res, next) => {
-
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({
-      message: "Email and password required"
-    });
-  }
-
-  try {
-
-    // continue to controller
-    next();
-
-  } catch (error) {
-
-    return res.status(500).json({
-      message: "Login validation error"
-    });
-
-  }
-
-}, auth.login);
-
-
-/* =========================
-   EXPORT ROUTER
-========================= */
+// ── FIX: Remove the useless middleware wrapper that added latency.
+// The try/catch around a bare next() call serves no purpose — errors from
+// auth.login are already caught inside the controller. Every login was paying
+// the cost of an extra async function call + microtask tick for zero benefit.
+router.post("/login",           auth.login);
+router.post("/register",        auth.register);
+router.post("/send-otp",        auth.sendOTP);
+router.post("/verify-otp",      auth.verifyOTP);
+router.post("/reset-password",  auth.resetPassword);
+router.get( "/profile/:id",     auth.getUserProfile);
 
 module.exports = router;

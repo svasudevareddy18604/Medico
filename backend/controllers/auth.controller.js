@@ -1,6 +1,6 @@
-const db = require("../config/db");
+const db        = require("../config/db");
 const sendEmail = require("../config/mailer");
-const bcrypt = require("bcrypt");
+const bcrypt    = require("bcrypt");
 
 /* ─── HELPERS ─────────────────────────────────────────────────────────────── */
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000);
@@ -173,14 +173,28 @@ exports.login = async (req, res) => {
     if (!email || !password)
       return res.status(400).json({ success: false, message: "Email and password required" });
 
+    // FIX 1: Split into two targeted queries instead of one heavy LEFT JOIN.
+    //
+    // The original single query always joined caretaker_profiles + ran a
+    // correlated subquery COUNT(*) on caretaker_documents for EVERY login —
+    // even for admins and care-seekers who never need that data.
+    // Now we fetch only what every role needs first (lightweight), then fetch
+    // caretaker-specific data only when the role actually requires it.
+    //
+    // FIX 2: SELECT only the columns we actually use.
+    // Selecting * or unused columns forces MySQL to read and transmit extra
+    // data over the connection. We now list exactly what the login response
+    // needs, keeping the result row as small as possible.
+    //
+    // FIX 3: Ensure users.email has an index (add this to your DB if missing):
+    //   ALTER TABLE users ADD INDEX idx_users_email (email);
+    // Without an index, every login triggers a full table scan.
     const [rows] = await db.query(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.password,
-              u.profile_completed, u.approval_status, u.is_blocked,
-              cp.caregiver_type,
-              (SELECT COUNT(*) FROM caretaker_documents cd WHERE cd.user_id = u.id) AS documents_uploaded
-       FROM users u
-       LEFT JOIN caretaker_profiles cp ON cp.user_id = u.id
-       WHERE u.email = ?`,
+      `SELECT id, first_name, last_name, email, role, password,
+              profile_completed, approval_status, is_blocked
+       FROM users
+       WHERE email = ?
+       LIMIT 1`,
       [email]
     );
 
@@ -189,26 +203,61 @@ exports.login = async (req, res) => {
 
     const user = rows[0];
 
-    if (!(await bcrypt.compare(password, user.password)))
+    // FIX 4: Run bcrypt.compare and the is_blocked check in parallel with
+    // nothing — bcrypt is the dominant cost (~100-300 ms CPU). We can't
+    // avoid it, but we make sure nothing else waits before or after it
+    // unnecessarily.
+    if (user.is_blocked === 1)
+      return res.status(403).json({
+        success: false,
+        message: "Account blocked. Please contact our support team for the reason.",
+      });
+
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch)
       return res.status(401).json({ success: false, message: "Wrong password" });
 
-    if (user.is_blocked === 1)
-      return res.status(403).json({ success: false, message: "Account blocked, Please Contact Our Support team for Reason." });
+    // FIX 5: Fire the FCM token update WITHOUT awaiting it.
+    // Waiting for a DB UPDATE that the client doesn't need in the response
+    // adds 20-80 ms to every login for zero user-facing benefit.
+    // We fire-and-forget it and let it complete in the background.
+    if (fcm_token) {
+      db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcm_token, user.id])
+        .catch((err) => console.error("FCM token update failed:", err));
+    }
 
-    if (fcm_token)
-      await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcm_token, user.id]);
+    // FIX 6: Fetch caretaker-specific fields only for care_taker role.
+    // admins and care_seekers never need caregiver_type or documents_uploaded,
+    // so we skip this query entirely for them — saving one round-trip.
+    let caregiver_type      = null;
+    let documents_uploaded  = 0;
 
-    res.json({
-      success: true,
-      id: user.id,
-      role: user.role,
-      email: user.email,
-      first_name: user.first_name,
-      last_name: user.last_name,
+    if (user.role === "care_taker") {
+      const [ctRows] = await db.query(
+        `SELECT cp.caregiver_type,
+                (SELECT COUNT(*) FROM caretaker_documents cd WHERE cd.user_id = ?) AS doc_count
+         FROM caretaker_profiles cp
+         WHERE cp.user_id = ?
+         LIMIT 1`,
+        [user.id, user.id]
+      );
+      if (ctRows.length > 0) {
+        caregiver_type     = ctRows[0].caregiver_type;
+        documents_uploaded = ctRows[0].doc_count > 0 ? 1 : 0;
+      }
+    }
+
+    return res.json({
+      success:           true,
+      id:                user.id,
+      role:              user.role,
+      email:             user.email,
+      first_name:        user.first_name,
+      last_name:         user.last_name,
       profile_completed: user.profile_completed,
-      documents_uploaded: user.documents_uploaded > 0 ? 1 : 0,
-      approval_status: user.approval_status,
-      caregiver_type: user.caregiver_type
+      documents_uploaded,
+      approval_status:   user.approval_status,
+      caregiver_type,
     });
 
   } catch (err) {
@@ -221,7 +270,7 @@ exports.login = async (req, res) => {
 exports.getUserProfile = async (req, res) => {
   try {
     const [rows] = await db.query(
-      "SELECT first_name, last_name, email FROM users WHERE id = ?",
+      "SELECT first_name, last_name, email FROM users WHERE id = ? LIMIT 1",
       [req.params.id]
     );
 

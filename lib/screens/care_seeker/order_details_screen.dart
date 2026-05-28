@@ -319,7 +319,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text(
-            "Order Details",
+            "Booking Details",
             style: TextStyle(
               color: Colors.white, fontSize: 21,
               fontWeight: FontWeight.w800, letterSpacing: -0.3,
