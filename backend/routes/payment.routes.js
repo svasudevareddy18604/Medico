@@ -23,8 +23,6 @@ console.log("🔑 Cashfree ENV:", {
 });
 
 // ── HEADERS ───────────────────────────────────────────────────────────────────
-// "2022-09-01" avoids the Cashfree sandbox "paymentpayment" suffix bug
-// that exists in newer API versions on sandbox only.
 const CF_HEADERS = () => ({
   "x-client-id":     process.env.CASHFREE_APP_ID,
   "x-client-secret": process.env.CASHFREE_SECRET_KEY,
@@ -34,28 +32,35 @@ const CF_HEADERS = () => ({
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 const ok  = (res, msg, data = {}) =>
-  res.json({ success: true,  message: msg, ...data });
+  res.json({ success: true, message: msg, ...data });
 const err = (res, msg, status = 500) =>
   res.status(status).json({ success: false, message: msg });
 
 /**
- * CASHFREE SANDBOX BUG — confirmed from your logs:
- *
- *   Raw:   session_xxx_Apaymentpayment
- *   Clean: session_xxx_A
- *
- * Cashfree sandbox (NOT production) appends "payment" or "paymentpayment"
- * to session IDs when using API versions >= 2023-xx-xx.
- * Switching to "2022-09-01" usually prevents it, but we also strip as
- * a safety net in case sandbox still misbehaves.
- *
- * This function is a NO-OP in production (IS_SANDBOX = false).
+ * Strip the Cashfree sandbox bug suffix ("paymentpayment" / "payment")
+ * appended to payment_session_id. This is a NO-OP in production.
  */
 function sanitizeSessionId(raw) {
   if (!IS_SANDBOX) return raw;
   return raw
     .replace(/paymentpayment$/i, "")
     .replace(/payment$/i, "");
+}
+
+/**
+ * Build the correct Cashfree checkout URL.
+ *
+ * SANDBOX : https://sandbox.cashfree.com/pg/view/orders/{sessionId}
+ * PROD    : https://payments.cashfree.com/order/{sessionId}
+ *
+ * The "/checkout/post/pay?sessionId=..." path returns 404 on sandbox.
+ * The "/pg/view/orders/{session}" path is the working sandbox checkout.
+ */
+function buildPaymentUrl(sessionId) {
+  if (IS_SANDBOX) {
+    return `https://sandbox.cashfree.com/pg/view/orders/${sessionId}`;
+  }
+  return `https://payments.cashfree.com/order/${sessionId}`;
 }
 
 // ── CREATE ORDER ──────────────────────────────────────────────────────────────
@@ -105,19 +110,13 @@ router.post("/create-order", async (req, res) => {
       return err(res, "Payment gateway did not return a session. Check credentials.");
     }
 
-    // Strip sandbox suffix bug (NO-OP in production)
     const payment_session_id = sanitizeSessionId(rawSession);
+    const payment_url        = buildPaymentUrl(payment_session_id);
 
     console.log("🔑 Raw session   :", rawSession);
     console.log("🔑 Clean session :", payment_session_id);
     console.log("🔑 Stripped chars:", rawSession.length - payment_session_id.length);
-
-    const checkoutBase = IS_SANDBOX
-      ? "https://sandbox.cashfree.com/checkout/post/pay"
-      : "https://checkout.cashfree.com/post/pay";
-
-    const payment_url = `${checkoutBase}?sessionId=${payment_session_id}`;
-    console.log("🔗 Payment URL:", payment_url);
+    console.log("🔗 Payment URL   :", payment_url);
 
     return ok(res, "Order created", {
       payment_session_id,
@@ -127,12 +126,8 @@ router.post("/create-order", async (req, res) => {
   } catch (e) {
     const cfErr = e.response?.data;
     console.error("❌ CREATE ORDER ERROR:", cfErr || e.message);
-
     if (cfErr?.code === "authentication_error")
       console.error("👉 Check CASHFREE_APP_ID and CASHFREE_SECRET_KEY in .env");
-    if (cfErr?.code === "rate_limit_error")
-      console.error("👉 Too many requests — slow down");
-
     return err(res, cfErr?.message || "Order creation failed");
   }
 });
@@ -230,14 +225,12 @@ router.post("/verify", async (req, res) => {
 router.post("/cod-notification", async (req, res) => {
   const { order_id, fcm_token } = req.body;
   console.log("💵 COD notification →", order_id);
-
   try {
     await db.query(
       `UPDATE orders SET status = 'CONFIRMED', payment_status = 'PENDING' WHERE id = ?`,
       [order_id]
     );
     ok(res, "COD confirmed");
-
     setImmediate(async () => {
       if (fcm_token) {
         await sendPushNotification(
