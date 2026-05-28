@@ -39,7 +39,6 @@ const getServiceName = async (orderId) => {
 };
 
 // Refund computed on subtotal only — service_charge is non-refundable
-// payment_method is now ONLINE (not RAZORPAY)
 const computeRefund = (order) => {
   if (
     order.payment_method !== "ONLINE" ||
@@ -129,6 +128,7 @@ router.post("/place", async (req, res) => {
       latitude,
       longitude,
       items,
+      service_charge,   // sent by Flutter — already calculated correctly
     } = req.body;
 
     if (!items?.length)
@@ -136,10 +136,18 @@ router.post("/place", async (req, res) => {
         .status(400)
         .json({ success: false, message: "No services selected" });
 
-    const [[settings]] = await db
-      .query(`SELECT service_charge FROM admin_settings LIMIT 1`)
-      .catch(() => [[{ service_charge: 0 }]]);
-    const serviceCharge = parseFloat(settings?.service_charge ?? 0);
+    // ── SERVICE CHARGE RESOLUTION ──────────────────────────────────────────
+    // Priority 1: use value sent by Flutter (already correct)
+    // Priority 2: fall back to admin_settings if Flutter didn't send it
+    let serviceCharge = parseFloat(service_charge ?? -1);
+    if (isNaN(serviceCharge) || serviceCharge < 0) {
+      const [[settings]] = await db
+        .query(`SELECT service_charge FROM admin_settings LIMIT 1`)
+        .catch(() => [[{ service_charge: 0 }]]);
+      serviceCharge = parseFloat(settings?.service_charge ?? 0);
+    }
+
+    console.log(`💰 service_charge from Flutter: ${service_charge} → using: ${serviceCharge}`);
 
     conn = await db.getConnection();
     await conn.beginTransaction();
@@ -162,7 +170,6 @@ router.post("/place", async (req, res) => {
       );
       const total = subtotal + serviceCharge;
 
-      // payment_method is ONLINE (Cashfree) or COD
       const isPaid =
         payment_method === "ONLINE" && !!payment_id;
 
@@ -237,11 +244,11 @@ router.post("/place", async (req, res) => {
       }
 
       createdOrders.push({
-        orderId,
-        orderCode,
+        order_id:      orderId,       // snake_case so Flutter reads it correctly
+        order_code:    orderCode,
         category,
         subtotal,
-        serviceCharge,
+        service_charge: serviceCharge,
         total,
       });
     }
@@ -263,7 +270,7 @@ router.post("/place", async (req, res) => {
         );
         const dateStr = fmtDate(date);
         for (const ord of createdOrders) {
-          const serviceName = await getServiceName(ord.orderId);
+          const serviceName = await getServiceName(ord.order_id);
           await sendBookingConfirmedToUser({
             user,
             order: ord,
@@ -323,7 +330,7 @@ router.post("/:orderId/cancel", async (req, res) => {
 
     await db.query(
       `UPDATE orders
-       SET status       = 'CANCELLED',
+       SET status        = 'CANCELLED',
            cancel_reason = ?,
            cancelled_at  = NOW(),
            refund_amount = ?,
@@ -409,10 +416,6 @@ router.get("/admin/refunds", async (req, res) => {
 
 /* =====================================================
    POST /orders/admin/refunds/:id/approve
-   NOTE: Cashfree refund API not yet integrated.
-   This marks the refund as approved in DB only.
-   Admin must manually process refund via Cashfree
-   dashboard until API integration is added.
 ===================================================== */
 
 router.post("/admin/refunds/:id/approve", async (req, res) => {
