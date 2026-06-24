@@ -321,6 +321,7 @@ const orderTable = ({
 const sendBookingConfirmedToUser = async ({
   user,
   order,
+  bookingId,
   serviceName,
   dateStr,
   slot,
@@ -331,12 +332,17 @@ const sendBookingConfirmedToUser = async ({
 
     console.log("SENDING USER EMAIL TO:", user?.email);
 
+    // Accept either naming style so this never silently breaks again
+    // if the caller's field names change.
+    const orderCode = bookingId || order.order_code || order.orderCode || "";
+    const total     = order.total ?? order.totalPrice ?? "";
+
     if (user?.fcm_token) {
 
       await sendPushNotification(
         user.fcm_token,
         "✅ Booking Confirmed",
-        `${order.orderCode} confirmed successfully`
+        `${orderCode} confirmed successfully`
       );
 
     }
@@ -346,7 +352,7 @@ const sendBookingConfirmedToUser = async ({
       await sendEmail({
         to: user.email,
 
-        subject: `✅ Booking Confirmed - ${order.orderCode}`,
+        subject: `✅ Booking Confirmed - ${orderCode}`,
 
         html: emailTemplate({
           title: "Booking Confirmed",
@@ -364,12 +370,12 @@ const sendBookingConfirmedToUser = async ({
             </p>
 
             ${orderTable({
-              orderCode: order.orderCode,
+              orderCode,
               serviceName,
               dateStr,
               slot,
               payment_method,
-              total: order.totalPrice
+              total
             })}
 
             <p style="
@@ -400,6 +406,7 @@ const sendBookingConfirmedToUser = async ({
 
 const sendBookingAlertToCaretakers = async ({
   order,
+  bookingId,
   serviceName,
   dateStr,
   slot,
@@ -409,6 +416,9 @@ const sendBookingAlertToCaretakers = async ({
   try {
 
     console.log("FETCHING CARETAKERS FOR:", order.category);
+
+    // Accept either naming style.
+    const orderCode = bookingId || order.order_code || order.orderCode || "";
 
     const [caretakers] = await db.query(`
       SELECT
@@ -441,7 +451,7 @@ const sendBookingAlertToCaretakers = async ({
           await sendPushNotification(
             ct.fcm_token,
             "🔔 New Booking Available",
-            `${order.orderCode} available for acceptance`
+            `${orderCode} available for acceptance`
           );
 
         }
@@ -451,7 +461,7 @@ const sendBookingAlertToCaretakers = async ({
           await sendEmail({
             to: ct.email,
 
-            subject: `🔔 New Booking Available - ${order.orderCode}`,
+            subject: `🔔 New Booking Available - ${orderCode}`,
 
             html: emailTemplate({
               title: "New Booking Available",
@@ -469,7 +479,7 @@ const sendBookingAlertToCaretakers = async ({
                 </p>
 
                 ${orderTable({
-                  orderCode: order.orderCode,
+                  orderCode,
                   serviceName,
                   dateStr,
                   slot,
