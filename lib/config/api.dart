@@ -1,6 +1,6 @@
 class Api {
 
-  static const bool isProduction = true; // flip to true when going live
+  static const bool isProduction = false; // flip to true when going live
   static const String baseUrl   = "https://medico-1-qk02.onrender.com/api";
   static const String imageBase = "https://medico-1-qk02.onrender.com";
 

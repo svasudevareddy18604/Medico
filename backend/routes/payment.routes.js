@@ -22,10 +22,6 @@ console.log("🔑 Cashfree ENV:", {
     ? `${process.env.CASHFREE_SECRET_KEY.slice(0, 4)}…` : "❌ MISSING",
 });
 
-if (!IS_SANDBOX) {
-  console.log("🚀 Running in PRODUCTION mode — real money will be charged.");
-}
-
 // ── HEADERS ───────────────────────────────────────────────────────────────────
 // IMPORTANT: Flutter SDK requires x-api-version "2023-08-01"
 // Using "2022-09-01" causes "token is not present" error in the SDK
@@ -73,10 +69,8 @@ router.post("/create-order", async (req, res) => {
     order_meta: {
       // Deep-link: Cashfree redirects here after UPI/netbanking browser flows
       return_url: `medico://payment?order_id=${orderId}`,
-      // Webhook — set BACKEND_PUBLIC_URL in .env (e.g. https://api.yourdomain.com)
-      ...(process.env.BACKEND_PUBLIC_URL && {
-        notify_url: `${process.env.BACKEND_PUBLIC_URL}/api/payment/webhook`,
-      }),
+      // notify_url is optional — add your webhook URL here if needed
+      // notify_url: "https://your-backend.com/api/payment/webhook",
     },
   };
 
@@ -85,28 +79,13 @@ router.post("/create-order", async (req, res) => {
   try {
     const response = await axios.post(`${CF_BASE}/orders`, payload, {
       headers: CF_HEADERS(),
-      timeout: 15000,
     });
 
     console.log("✅ Cashfree raw response:", JSON.stringify(response.data));
 
     const { payment_session_id, order_id } = response.data;
 
-    console.log("🔎 RAW session id   :", JSON.stringify(payment_session_id));
-    console.log("🔎 RAW session length:", payment_session_id?.length);
-
-    // ── SANITIZE: strip any corrupted/duplicated trailing text ──────────────
-    // Seen in the wild: session ids arriving with a stray "payment" or
-    // "paymentpayment" appended at the end, which breaks the Flutter SDK
-    // with "token is not present" / order_token_invalid.
-    const cleanSessionId = payment_session_id
-      ?.replace(/(payment)+$/i, "")
-      ?.trim();
-
-    console.log("🧹 CLEAN session id   :", JSON.stringify(cleanSessionId));
-    console.log("🧹 CLEAN session length:", cleanSessionId?.length);
-
-    if (!cleanSessionId) {
+    if (!payment_session_id) {
       console.error("❌ No payment_session_id in response:", response.data);
       return err(res, "Payment gateway did not return a session. Check credentials.");
     }
@@ -116,13 +95,13 @@ router.post("/create-order", async (req, res) => {
       ? `https://sandbox.cashfree.com/pg/orders/pay/${order_id}`
       : `https://payments.cashfree.com/order/${order_id}`;
 
-    console.log("🔑 Session ID    :", cleanSessionId);
+    console.log("🔑 Session ID    :", payment_session_id);
     console.log("🔗 Payment URL   :", payment_url);
 
     return ok(res, "Order created", {
-      payment_session_id: cleanSessionId,  // used by Flutter SDK
+      payment_session_id,  // used by Flutter SDK
       order_id,
-      payment_url,                         // used for browser redirect (optional)
+      payment_url,         // used for browser redirect (optional)
     });
 
   } catch (e) {
@@ -145,7 +124,7 @@ router.post("/verify", async (req, res) => {
   try {
     const response = await axios.get(
       `${CF_BASE}/orders/${cashfree_order_id}`,
-      { headers: CF_HEADERS(), timeout: 15000 }
+      { headers: CF_HEADERS() }
     );
 
     const status = response.data.order_status;
