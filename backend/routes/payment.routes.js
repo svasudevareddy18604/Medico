@@ -92,7 +92,21 @@ router.post("/create-order", async (req, res) => {
 
     const { payment_session_id, order_id } = response.data;
 
-    if (!payment_session_id) {
+    console.log("🔎 RAW session id   :", JSON.stringify(payment_session_id));
+    console.log("🔎 RAW session length:", payment_session_id?.length);
+
+    // ── SANITIZE: strip any corrupted/duplicated trailing text ──────────────
+    // Seen in the wild: session ids arriving with a stray "payment" or
+    // "paymentpayment" appended at the end, which breaks the Flutter SDK
+    // with "token is not present" / order_token_invalid.
+    const cleanSessionId = payment_session_id
+      ?.replace(/(payment)+$/i, "")
+      ?.trim();
+
+    console.log("🧹 CLEAN session id   :", JSON.stringify(cleanSessionId));
+    console.log("🧹 CLEAN session length:", cleanSessionId?.length);
+
+    if (!cleanSessionId) {
       console.error("❌ No payment_session_id in response:", response.data);
       return err(res, "Payment gateway did not return a session. Check credentials.");
     }
@@ -102,13 +116,13 @@ router.post("/create-order", async (req, res) => {
       ? `https://sandbox.cashfree.com/pg/orders/pay/${order_id}`
       : `https://payments.cashfree.com/order/${order_id}`;
 
-    console.log("🔑 Session ID    :", payment_session_id);
+    console.log("🔑 Session ID    :", cleanSessionId);
     console.log("🔗 Payment URL   :", payment_url);
 
     return ok(res, "Order created", {
-      payment_session_id,  // used by Flutter SDK
+      payment_session_id: cleanSessionId,  // used by Flutter SDK
       order_id,
-      payment_url,         // used for browser redirect (optional)
+      payment_url,                         // used for browser redirect (optional)
     });
 
   } catch (e) {
