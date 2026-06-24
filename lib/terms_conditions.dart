@@ -1,16 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:medico/utils/app_colors.dart';
 
 class TermsConditions extends StatelessWidget {
   const TermsConditions({super.key});
-
-  static const Color primary   = Color(0xFF1B7F6E);
-  static const Color gradStart = Color(0xFF1B7F6E);
-  static const Color gradEnd   = Color(0xFF25A98F);
-  static const gradient = LinearGradient(
-    colors: [gradStart, gradEnd],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
 
   Widget _sectionCard(IconData icon, String title, List<String> points) {
     return Container(
@@ -29,10 +21,9 @@ class TermsConditions extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              gradient: gradient,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
+            decoration: const BoxDecoration(
+              gradient: AppColors.gradient,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
             ),
             child: Row(
               children: [
@@ -61,13 +52,15 @@ class TermsConditions extends StatelessWidget {
                         children: [
                           const Text("•  ",
                               style: TextStyle(
-                                  color: primary,
+                                  color: AppColors.primary,
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold)),
                           Expanded(
                             child: Text(e,
                                 style: const TextStyle(
-                                    fontSize: 13.5, color: Color(0xFF3A3A3A), height: 1.5)),
+                                    fontSize: 13.5,
+                                    color: Color(0xFF3A3A3A),
+                                    height: 1.5)),
                           ),
                         ],
                       ),
@@ -93,7 +86,7 @@ class TermsConditions extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(16, 50, 16, 22),
             decoration: const BoxDecoration(
-              gradient: gradient,
+              gradient: AppColors.gradient,
               borderRadius: BorderRadius.only(
                 bottomLeft: Radius.circular(32),
                 bottomRight: Radius.circular(32),
@@ -147,7 +140,7 @@ class TermsConditions extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: const Color(0xFFE6F4F1),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: primary.withOpacity(0.2)),
+                      border: Border.all(color: AppColors.primary.withOpacity(0.2)),
                     ),
                     child: const Text(
                       "Welcome to MEDICO. By registering or using our platform, you agree to abide by these Terms & Conditions. These terms are legally binding and govern the use of our caregiver services platform. Non-compliance may result in immediate account suspension.",
@@ -241,11 +234,11 @@ class TermsConditions extends StatelessWidget {
                     width: double.infinity,
                     padding: const EdgeInsets.all(18),
                     decoration: BoxDecoration(
-                      gradient: gradient,
+                      gradient: AppColors.gradient,
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: primary.withOpacity(0.3),
+                          color: AppColors.primary.withOpacity(0.3),
                           blurRadius: 12,
                           offset: const Offset(0, 4),
                         ),
@@ -316,8 +309,7 @@ class TermsConditions extends StatelessWidget {
                   Center(
                     child: Text(
                       "Last updated: April 2026  •  Version 1.1.0",
-                      style: TextStyle(
-                          fontSize: 12, color: Colors.grey.shade500),
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                     ),
                   ),
                 ],

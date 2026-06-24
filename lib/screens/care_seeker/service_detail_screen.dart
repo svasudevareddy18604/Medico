@@ -89,9 +89,11 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   // ── ADD TO CART ───────────────────────────────────────────────────────────
   Future<void> addToCart() async {
     if (!isCategoryAvailable) {
-      showToast(
-        "No ${widget.service["category"]} professionals are available near you yet.",
-        type: _ToastType.unavailable,
+      showAppToast(
+        context: context,
+        message:
+            "No ${widget.service["category"]} professionals are available near you yet.",
+        type: AppToastType.unavailable,
         duration: const Duration(seconds: 5),
       );
       return;
@@ -109,9 +111,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
       );
       if (res.statusCode == 200 || res.statusCode == 201) {
         loadCartCount();
-        showToast(
-          "Added to cart successfully!",
-          type: _ToastType.success,
+        showAppToast(
+          context: context,
+          message: "Added to cart successfully!",
+          type: AppToastType.success,
           actionLabel: "View Cart",
           onAction: () => Navigator.push(
             context,
@@ -120,42 +123,22 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
           ).then((_) => loadCartCount()),
         );
       } else {
-        showToast("Failed to add. Please try again.", type: _ToastType.error);
+        showAppToast(
+          context: context,
+          message: "Failed to add. Please try again.",
+          type: AppToastType.error,
+        );
       }
     } catch (_) {
-      showToast("Network error. Check your connection.",
-          type: _ToastType.error);
+      showAppToast(
+        context: context,
+        message: "Network error. Check your connection.",
+        type: AppToastType.error,
+      );
     }
   }
 
-  // ── TOAST ─────────────────────────────────────────────────────────────────
-  void showToast(
-    String msg, {
-    _ToastType type = _ToastType.success,
-    String? actionLabel,
-    VoidCallback? onAction,
-    Duration duration = const Duration(seconds: 4),
-  }) {
-    final overlay = Overlay.of(context);
-    late OverlayEntry entry;
-    entry = OverlayEntry(
-        builder: (_) => _ToastWidget(
-              message: msg,
-              type: type,
-              actionLabel: actionLabel,
-              onAction: onAction,
-              duration: duration,
-              onDismiss: () {
-                try {
-                  entry.remove();
-                } catch (_) {}
-              },
-            ));
-    overlay.insert(entry);
-  }
-
   // ── ADD TO CART BUTTON ────────────────────────────────────────────────────
-
   Widget _addToCartButton() {
     // State 1: still checking
     if (isCheckingAvailability) {
@@ -164,10 +147,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
         child: ElevatedButton(
           onPressed: null,
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.grey.shade300,
+            backgroundColor: AppColors.border,
             padding: const EdgeInsets.symmetric(vertical: 16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14)),
           ),
           child: const SizedBox(
             height: 20,
@@ -189,10 +172,11 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             onPressed: null,
             icon: const Icon(Icons.add_shopping_cart_rounded, size: 18),
             label: const Text("Add to Cart",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                style:
+                    TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.grey.shade300,
-              foregroundColor: Colors.grey.shade500,
+              backgroundColor: AppColors.border,
+              foregroundColor: AppColors.muted,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14)),
@@ -204,57 +188,62 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF8EC),
+            color: AppColors.warning.withOpacity(0.08),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFFFD166), width: 1.5),
+            border: Border.all(
+                color: AppColors.warning.withOpacity(0.35), width: 1.5),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFD166).withOpacity(0.3),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.person_search_rounded,
-                    color: Color(0xFFB7600A), size: 18),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  "No $category professionals available",
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF7A4100),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withOpacity(0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.person_search_rounded,
+                        color: AppColors.warning, size: 18),
                   ),
-                ),
-              ),
-            ]),
-            const SizedBox(height: 10),
-            Text(
-              "We currently don't have any $category caregivers available "
-              "in your area. Other service categories may still be available.",
-              style: const TextStyle(
-                  fontSize: 13, color: Color(0xFF7A4100), height: 1.55),
-            ),
-            const SizedBox(height: 10),
-            Row(children: const [
-              Icon(Icons.notifications_active_rounded,
-                  color: Color(0xFFB7600A), size: 15),
-              SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  "You'll be notified as soon as one becomes available!",
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      "No $category professionals available",
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.warning,
+                      ),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+                Text(
+                  "We currently don't have any $category caregivers available "
+                  "in your area. Other service categories may still be available.",
                   style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF7A4100),
-                    fontWeight: FontWeight.w600,
-                  ),
+                      fontSize: 13,
+                      color: AppColors.warning.withOpacity(0.85),
+                      height: 1.55),
                 ),
-              ),
-            ]),
-          ]),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Icon(Icons.notifications_active_rounded,
+                      color: AppColors.warning, size: 15),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      "You'll be notified as soon as one becomes available!",
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.warning,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ]),
+              ]),
         ),
       ]);
     }
@@ -302,7 +291,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               offset: const Offset(0, 3)),
         ],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child:
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(
             padding: const EdgeInsets.all(6),
@@ -310,8 +300,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               color: AppColors.primary.withOpacity(0.1),
               borderRadius: BorderRadius.circular(8),
             ),
-            child:
-                Icon(_sectionIcon(title), color: AppColors.primary, size: 15),
+            child: Icon(_sectionIcon(title),
+                color: AppColors.primary, size: 15),
           ),
           const SizedBox(width: 10),
           Text(title,
@@ -413,7 +403,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                           style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
-                              color: isDark ? Colors.white : Colors.black87)),
+                              color: isDark
+                                  ? Colors.white
+                                  : Colors.black87)),
                       const SizedBox(height: 6),
                       Text("₹${r["price"] ?? 0}",
                           style: TextStyle(
@@ -440,8 +432,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
       backgroundColor:
           isDark ? const Color(0xFF121212) : const Color(0xFFF2F4F7),
       body: Column(children: [
-
-        // ── HEADER ────────────────────────────────────────────────────────
+        // ── HEADER ──────────────────────────────────────────────────────
         Container(
           padding: EdgeInsets.fromLTRB(
               16, MediaQuery.of(context).padding.top + 16, 16, 20),
@@ -478,7 +469,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                   await Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => CartScreen(userId: widget.userId)),
+                        builder: (_) =>
+                            CartScreen(userId: widget.userId)),
                   );
                   loadCartCount();
                 },
@@ -497,7 +489,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                   top: -3,
                   child: CircleAvatar(
                     radius: 9,
-                    backgroundColor: Colors.red,
+                    backgroundColor: AppColors.danger,
                     child: Text("$cartCount",
                         style: const TextStyle(
                             fontSize: 10,
@@ -509,145 +501,146 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
           ]),
         ),
 
-        // ── BODY ──────────────────────────────────────────────────────────
+        // ── BODY ────────────────────────────────────────────────────────
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(18),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-              // Service image
-              ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: imageUrl.isEmpty
-                    ? Container(
-                        height: 220,
-                        color: isDark
-                            ? const Color(0xFF2A2A3E)
-                            : Colors.grey[200],
-                        child: Center(
-                            child: Icon(Icons.medical_services_rounded,
-                                color: AppColors.primary, size: 48)))
-                    : Image.network(imageUrl,
-                        height: 220,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Service image
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: imageUrl.isEmpty
+                        ? Container(
                             height: 220,
                             color: isDark
                                 ? const Color(0xFF2A2A3E)
-                                : Colors.grey[200])),
-              ),
-              const SizedBox(height: 18),
+                                : Colors.grey[200],
+                            child: Center(
+                                child: Icon(
+                                    Icons.medical_services_rounded,
+                                    color: AppColors.primary,
+                                    size: 48)))
+                        : Image.network(imageUrl,
+                            height: 220,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                                height: 220,
+                                color: isDark
+                                    ? const Color(0xFF2A2A3E)
+                                    : Colors.grey[200])),
+                  ),
+                  const SizedBox(height: 18),
 
-              // ── NAME ────────────────────────────────────────────────────
-              Text(s["name"] ?? "",
-                  style: TextStyle(
-                      fontSize: 23,
-                      fontWeight: FontWeight.bold,
-                      color: isDark
-                          ? Colors.white
-                          : const Color(0xFF1A1A2E))),
-              const SizedBox(height: 10),
-
-              // ── PRICE + CATEGORY — FIX: Wrap in a Wrap widget so chips
-              //    never overflow horizontally regardless of text length ──
-              Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                children: [
-                  // Price chip
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: AppColors.primary.withOpacity(0.3)),
-                    ),
-                    child: Text(
-                      "₹${s["price"] ?? 0}$priceType",
+                  // ── NAME ──────────────────────────────────────────────
+                  Text(s["name"] ?? "",
                       style: TextStyle(
-                          fontSize: 17,
+                          fontSize: 23,
                           fontWeight: FontWeight.bold,
-                          color: AppColors.primary),
-                    ),
-                  ),
+                          color: isDark
+                              ? Colors.white
+                              : const Color(0xFF1A1A2E))),
+                  const SizedBox(height: 10),
 
-                  // Category chip — only if non-empty
-                  if (category.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.indigo.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                            color: Colors.indigo.withOpacity(0.25)),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.category_rounded,
-                            color: Colors.indigo, size: 13),
-                        const SizedBox(width: 5),
-                        // FIX: constrain text so it wraps cleanly
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth:
-                                MediaQuery.of(context).size.width - 200,
-                          ),
-                          child: Text(
-                            category,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.indigo),
-                          ),
+                  // ── PRICE + CATEGORY ──────────────────────────────────
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: AppColors.primary.withOpacity(0.3)),
                         ),
-                      ]),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // Info sections
-              _sectionCard("Description", s["description"]),
-              _sectionCard("Includes", s["includes"]),
-              _sectionCard("Excludes", s["excludes"]),
-              _sectionCard("Requirements", s["requirements"]),
-              _sectionCard("Duration", s["duration"]),
-              const SizedBox(height: 8),
-
-              // Add to cart button (3 states)
-              _addToCartButton(),
-              const SizedBox(height: 30),
-
-              // Recommended services
-              if (isLoadingRecommended)
-                const Center(child: CircularProgressIndicator())
-              else if (recommended.isNotEmpty) ...[
-                Text("Recommended Services",
-                    style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: isDark
-                            ? Colors.white
-                            : const Color(0xFF1A1A2E))),
-                const SizedBox(height: 12),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: recommended
-                        .map((r) => _recommendedCard(r))
-                        .toList(),
+                        child: Text(
+                          "₹${s["price"] ?? 0}$priceType",
+                          style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primary),
+                        ),
+                      ),
+                      if (category.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.secondary.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color:
+                                    AppColors.secondary.withOpacity(0.25)),
+                          ),
+                          child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.category_rounded,
+                                    color: AppColors.secondary, size: 13),
+                                const SizedBox(width: 5),
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        MediaQuery.of(context).size.width -
+                                            200,
+                                  ),
+                                  child: Text(
+                                    category,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.secondary),
+                                  ),
+                                ),
+                              ]),
+                        ),
+                    ],
                   ),
-                ),
-              ],
-              const SizedBox(height: 24),
-            ]),
+                  const SizedBox(height: 20),
+
+                  // Info sections
+                  _sectionCard("Description", s["description"]),
+                  _sectionCard("Includes", s["includes"]),
+                  _sectionCard("Excludes", s["excludes"]),
+                  _sectionCard("Requirements", s["requirements"]),
+                  _sectionCard("Duration", s["duration"]),
+                  const SizedBox(height: 8),
+
+                  // Add to cart button
+                  _addToCartButton(),
+                  const SizedBox(height: 30),
+
+                  // Recommended
+                  if (isLoadingRecommended)
+                    const Center(child: CircularProgressIndicator())
+                  else if (recommended.isNotEmpty) ...[
+                    Text("Recommended Services",
+                        style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: isDark
+                                ? Colors.white
+                                : const Color(0xFF1A1A2E))),
+                    const SizedBox(height: 12),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: recommended
+                            .map((r) => _recommendedCard(r))
+                            .toList(),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                ]),
           ),
         ),
       ]),
@@ -656,19 +649,151 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  TOAST SYSTEM
+//  PROFESSIONAL TOAST SYSTEM
+//  Uses AppColors throughout — change AppColors, toasts update.
 // ══════════════════════════════════════════════════════════════
 
-enum _ToastType { success, error, warning, info, unavailable }
+enum AppToastType { success, error, warning, info, unavailable }
 
-class _ToastWidget extends StatefulWidget {
+/// Call this from anywhere you have a [BuildContext].
+void showAppToast({
+  required BuildContext context,
+  required String message,
+  AppToastType type = AppToastType.success,
+  String? actionLabel,
+  VoidCallback? onAction,
+  Duration duration = const Duration(seconds: 4),
+}) {
+  final overlay = Overlay.of(context);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => _AppToastWidget(
+      message: message,
+      type: type,
+      actionLabel: actionLabel,
+      onAction: onAction,
+      duration: duration,
+      onDismiss: () {
+        try {
+          entry.remove();
+        } catch (_) {}
+      },
+    ),
+  );
+  overlay.insert(entry);
+}
+
+// ── Toast style descriptor ────────────────────────────────────────────────
+class _ToastStyle {
+  final Color surfaceColor;   // card background
+  final Color borderColor;    // left accent bar + border
+  final Color iconBgColor;    // icon pill background
+  final Color iconColor;      // icon color
+  final Color titleColor;     // title text
+  final Color messageColor;   // body text
+  final Color actionBgColor;  // action button bg
+  final Color actionFgColor;  // action button text
+  final IconData icon;
+  final String label;
+
+  const _ToastStyle({
+    required this.surfaceColor,
+    required this.borderColor,
+    required this.iconBgColor,
+    required this.iconColor,
+    required this.titleColor,
+    required this.messageColor,
+    required this.actionBgColor,
+    required this.actionFgColor,
+    required this.icon,
+    required this.label,
+  });
+}
+
+_ToastStyle _resolveStyle(AppToastType type) {
+  switch (type) {
+    case AppToastType.success:
+      return _ToastStyle(
+        surfaceColor: const Color(0xFFF0FDF6),
+        borderColor: AppColors.success,
+        iconBgColor: AppColors.success.withOpacity(0.25),
+        iconColor: Color(0xFF14823A),
+        titleColor: Color(0xFF0D6030),
+        messageColor: Color(0xFF1A5C35),
+        actionBgColor: AppColors.success.withOpacity(0.3),
+        actionFgColor: Color(0xFF0D5C2E),
+        icon: Icons.check_circle_rounded,
+        label: "Success",
+      );
+
+    case AppToastType.error:
+      return _ToastStyle(
+        surfaceColor: const Color(0xFFFFF5F5),
+        borderColor: AppColors.danger,
+        iconBgColor: AppColors.danger.withOpacity(0.12),
+        iconColor: AppColors.danger,
+        titleColor: Color(0xFFB91C1C),
+        messageColor: Color(0xFFC53030),
+        actionBgColor: AppColors.danger.withOpacity(0.1),
+        actionFgColor: Color(0xFFB91C1C),
+        icon: Icons.cancel_rounded,
+        label: "Error",
+      );
+
+    case AppToastType.warning:
+      return _ToastStyle(
+        surfaceColor: const Color(0xFFFFFBEB),
+        borderColor: AppColors.warning,
+        iconBgColor: AppColors.warning.withOpacity(0.15),
+        iconColor: AppColors.warning,
+        titleColor: Color(0xFFB45309),
+        messageColor: Color(0xFFC0611A),
+        actionBgColor: AppColors.warning.withOpacity(0.15),
+        actionFgColor: Color(0xFFB45309),
+        icon: Icons.warning_amber_rounded,
+        label: "Warning",
+      );
+
+    case AppToastType.info:
+      return _ToastStyle(
+        surfaceColor: const Color(0xFFEFF6FF),
+        borderColor: AppColors.info,
+        iconBgColor: AppColors.info.withOpacity(0.12),
+        iconColor: AppColors.info,
+        titleColor: Color(0xFF1D4ED8),
+        messageColor: Color(0xFF2563EB),
+        actionBgColor: AppColors.info.withOpacity(0.1),
+        actionFgColor: Color(0xFF1D4ED8),
+        icon: Icons.info_rounded,
+        label: "Info",
+      );
+
+    case AppToastType.unavailable:
+      return _ToastStyle(
+        surfaceColor: const Color(0xFFF8F7FF),
+        borderColor: AppColors.primary,
+        iconBgColor: AppColors.primary.withOpacity(0.1),
+        iconColor: AppColors.primary,
+        titleColor: AppColors.primary,
+        messageColor: AppColors.dark.withOpacity(0.7),
+        actionBgColor: AppColors.primary.withOpacity(0.1),
+        actionFgColor: AppColors.primary,
+        icon: Icons.person_off_rounded,
+        label: "Not Available",
+      );
+  }
+}
+
+// ── Toast widget ──────────────────────────────────────────────────────────
+class _AppToastWidget extends StatefulWidget {
   final String message;
-  final _ToastType type;
+  final AppToastType type;
   final VoidCallback onDismiss;
   final String? actionLabel;
   final VoidCallback? onAction;
   final Duration duration;
-  const _ToastWidget({
+
+  const _AppToastWidget({
     required this.message,
     required this.type,
     required this.onDismiss,
@@ -676,19 +801,20 @@ class _ToastWidget extends StatefulWidget {
     this.actionLabel,
     this.onAction,
   });
+
   @override
-  State<_ToastWidget> createState() => _ToastWidgetState();
+  State<_AppToastWidget> createState() => _AppToastWidgetState();
 }
 
-class _ToastWidgetState extends State<_ToastWidget>
+class _AppToastWidgetState extends State<_AppToastWidget>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 380));
+      vsync: this, duration: const Duration(milliseconds: 320));
   late final Animation<double> _fade =
       CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
   late final Animation<Offset> _slide =
-      Tween<Offset>(begin: const Offset(0, -0.35), end: Offset.zero)
-          .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+      Tween<Offset>(begin: const Offset(0, -0.5), end: Offset.zero)
+          .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
 
   @override
   void initState() {
@@ -709,45 +835,12 @@ class _ToastWidgetState extends State<_ToastWidget>
     super.dispose();
   }
 
-  ({Color bg, Color accent, IconData icon, String label}) get _style =>
-      switch (widget.type) {
-        _ToastType.success => (
-            bg: const Color(0xFF1B7A4A),
-            accent: const Color(0xFF34C97B),
-            icon: Icons.check_circle_rounded,
-            label: "Success"
-          ),
-        _ToastType.error => (
-            bg: const Color(0xFFC0392B),
-            accent: const Color(0xFFFF6B6B),
-            icon: Icons.cancel_rounded,
-            label: "Error"
-          ),
-        _ToastType.warning => (
-            bg: const Color(0xFFB7600A),
-            accent: const Color(0xFFFFB347),
-            icon: Icons.warning_amber_rounded,
-            label: "Warning"
-          ),
-        _ToastType.info => (
-            bg: const Color(0xFF1A6FA8),
-            accent: const Color(0xFF4FC3F7),
-            icon: Icons.info_rounded,
-            label: "Info"
-          ),
-        _ToastType.unavailable => (
-            bg: const Color(0xFF5C4A8A),
-            accent: const Color(0xFFB39DDB),
-            icon: Icons.person_off_rounded,
-            label: "Not Available"
-          ),
-      };
-
   @override
   Widget build(BuildContext context) {
-    final s = _style;
+    final style = _resolveStyle(widget.type);
+
     return Positioned(
-      top: MediaQuery.of(context).padding.top + 14,
+      top: MediaQuery.of(context).padding.top + 12,
       left: 16,
       right: 16,
       child: SlideTransition(
@@ -759,89 +852,142 @@ class _ToastWidgetState extends State<_ToastWidget>
             child: GestureDetector(
               onTap: _dismiss,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 14),
                 decoration: BoxDecoration(
-                  color: s.bg,
+                  color: style.surfaceColor,
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: style.borderColor.withOpacity(0.35),
+                      width: 1),
                   boxShadow: [
                     BoxShadow(
-                        color: s.bg.withOpacity(0.5),
-                        blurRadius: 20,
-                        offset: const Offset(0, 8))
+                      color: style.borderColor.withOpacity(0.12),
+                      blurRadius: 20,
+                      spreadRadius: 0,
+                      offset: const Offset(0, 6),
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 12,
+                      offset: const Offset(0, 3),
+                    ),
                   ],
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Icon circle
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          shape: BoxShape.circle),
-                      child: Icon(s.icon, color: s.accent, size: 22),
-                    ),
-                    const SizedBox(width: 12),
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // ── Left accent bar ────────────────────────────
+                      Container(
+                        width: 4,
+                        decoration: BoxDecoration(
+                          color: style.borderColor,
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(16),
+                            bottomLeft: Radius.circular(16),
+                          ),
+                        ),
+                      ),
 
-                    // Text + action
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(s.label,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13.5,
-                                  letterSpacing: 0.3)),
-                          const SizedBox(height: 3),
-                          Text(widget.message,
-                              style: TextStyle(
-                                  color: Colors.white.withOpacity(0.9),
-                                  fontSize: 13,
-                                  height: 1.45)),
-                          if (widget.actionLabel != null) ...[
-                            const SizedBox(height: 8),
-                            GestureDetector(
-                              onTap: () {
-                                _dismiss();
-                                widget.onAction?.call();
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 6),
+                      // ── Content ────────────────────────────────────
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 14, 12, 14),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Icon pill
+                              Container(
+                                width: 36,
+                                height: 36,
                                 decoration: BoxDecoration(
-                                    color:
-                                        Colors.white.withOpacity(0.2),
-                                    borderRadius:
-                                        BorderRadius.circular(8)),
-                                child: Text(widget.actionLabel!,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 12)),
+                                  color: style.iconBgColor,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(style.icon,
+                                    color: style.iconColor, size: 20),
                               ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
+                              const SizedBox(width: 12),
 
-                    // Close
-                    GestureDetector(
-                      onTap: _dismiss,
-                      child: Padding(
-                        padding:
-                            const EdgeInsets.only(left: 6, top: 2),
-                        child: Icon(Icons.close_rounded,
-                            color: Colors.white.withOpacity(0.6),
-                            size: 18),
+                              // Text + action
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      style.label,
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: style.titleColor,
+                                        letterSpacing: 0.1,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      widget.message,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: style.messageColor,
+                                        height: 1.45,
+                                      ),
+                                    ),
+                                    if (widget.actionLabel != null) ...[
+                                      const SizedBox(height: 10),
+                                      GestureDetector(
+                                        onTap: () {
+                                          _dismiss();
+                                          widget.onAction?.call();
+                                        },
+                                        child: Container(
+                                          padding:
+                                              const EdgeInsets.symmetric(
+                                                  horizontal: 12,
+                                                  vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: style.actionBgColor,
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                            border: Border.all(
+                                              color: style.borderColor
+                                                  .withOpacity(0.3),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            widget.actionLabel!,
+                                            style: TextStyle(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: style.actionFgColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+
+                              // Close button
+                              GestureDetector(
+                                onTap: _dismiss,
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.only(left: 4),
+                                  child: Icon(Icons.close_rounded,
+                                      color: style.titleColor
+                                          .withOpacity(0.4),
+                                      size: 17),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

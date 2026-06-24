@@ -22,6 +22,10 @@ console.log("🔑 Cashfree ENV:", {
     ? `${process.env.CASHFREE_SECRET_KEY.slice(0, 4)}…` : "❌ MISSING",
 });
 
+if (!IS_SANDBOX) {
+  console.log("🚀 Running in PRODUCTION mode — real money will be charged.");
+}
+
 // ── HEADERS ───────────────────────────────────────────────────────────────────
 // IMPORTANT: Flutter SDK requires x-api-version "2023-08-01"
 // Using "2022-09-01" causes "token is not present" error in the SDK
@@ -69,8 +73,10 @@ router.post("/create-order", async (req, res) => {
     order_meta: {
       // Deep-link: Cashfree redirects here after UPI/netbanking browser flows
       return_url: `medico://payment?order_id=${orderId}`,
-      // notify_url is optional — add your webhook URL here if needed
-      // notify_url: "https://your-backend.com/api/payment/webhook",
+      // Webhook — set BACKEND_PUBLIC_URL in .env (e.g. https://api.yourdomain.com)
+      ...(process.env.BACKEND_PUBLIC_URL && {
+        notify_url: `${process.env.BACKEND_PUBLIC_URL}/api/payment/webhook`,
+      }),
     },
   };
 
@@ -79,6 +85,7 @@ router.post("/create-order", async (req, res) => {
   try {
     const response = await axios.post(`${CF_BASE}/orders`, payload, {
       headers: CF_HEADERS(),
+      timeout: 15000,
     });
 
     console.log("✅ Cashfree raw response:", JSON.stringify(response.data));
@@ -124,7 +131,7 @@ router.post("/verify", async (req, res) => {
   try {
     const response = await axios.get(
       `${CF_BASE}/orders/${cashfree_order_id}`,
-      { headers: CF_HEADERS() }
+      { headers: CF_HEADERS(), timeout: 15000 }
     );
 
     const status = response.data.order_status;
