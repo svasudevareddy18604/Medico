@@ -43,6 +43,10 @@ class _AboutAppScreenState extends State<AboutAppScreen> {
             _section(Icons.info_outline_rounded, "About Medico",
                 content: "Medico bridges the gap between care seekers and trusted caregivers. "
                     "Book professional home healthcare in minutes — with complete transparency in pricing, availability, and quality."),
+            _section(Icons.flag_outlined, "Our Mission",
+                content: "To make quality home healthcare accessible, affordable, and reliable for every "
+                    "family — by connecting them with verified caregivers who provide compassionate, "
+                    "professional care right where it's needed most: home."),
             _section(Icons.medical_services_outlined, "Our Services", bullets: const [
               "🏥  Home nursing & medical care",
               "👴  Elderly care & companionship",
@@ -50,6 +54,13 @@ class _AboutAppScreenState extends State<AboutAppScreen> {
               "🦽  Post-hospitalization support",
               "🧘  Physiotherapy at home",
               "🧹  Non-medical daily assistance",
+            ]),
+            _section(Icons.touch_app_outlined, "How It Works", bullets: const [
+              "1️⃣  Choose a service & preferred time slot",
+              "2️⃣  Get matched with a nearby verified caregiver",
+              "3️⃣  Confirm booking & pay securely online or via cash",
+              "4️⃣  Track your caregiver in real time",
+              "5️⃣  Rate & review after service completion",
             ]),
             _section(Icons.star_outline_rounded, "Key Features", bullets: const [
               "✅  Verified & background-checked caregivers",
@@ -61,6 +72,10 @@ class _AboutAppScreenState extends State<AboutAppScreen> {
             _section(Icons.shield_outlined, "Safety & Trust",
                 content: "Every caregiver undergoes thorough background verification before listing. "
                     "Your personal data is encrypted and stored securely — never shared without your consent."),
+            _section(Icons.verified_user_outlined, "Secure Payments",
+                content: "All online payments are processed through secure, industry-compliant payment "
+                    "partners. Medico never stores your card or banking details — your transactions are "
+                    "encrypted end-to-end for complete peace of mind."),
             _section(Icons.workspace_premium_outlined, "Why Medico?", bullets: const [
               "🏆  Trusted by thousands of families",
               "⚡  Book a caregiver in under 2 minutes",

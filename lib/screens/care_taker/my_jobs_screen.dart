@@ -204,6 +204,9 @@ class _MyJobsScreenState extends State<MyJobsScreen>
     final slot      = _fmtSlot(job["slot"]);
     final color     = _statusColor(status);
     final isCancelled = status == "CANCELLED" || status == "CARETAKER_CANCELLED";
+    // Location is restricted once a service is completed — same privacy
+    // rule as the order details screen, applied here in the list card too.
+    final isCompleted = status == "COMPLETED";
 
     return GestureDetector(
       onTap: () async {
@@ -328,9 +331,11 @@ class _MyJobsScreenState extends State<MyJobsScreen>
               ),
             ],
 
-            // Info rows
-            _infoRow(Icons.location_on_rounded, location),
-            const SizedBox(height: 5),
+            // Info rows — location hidden once the service is completed
+            if (!isCompleted) ...[
+              _infoRow(Icons.location_on_rounded, location),
+              const SizedBox(height: 5),
+            ],
             _infoRow(Icons.calendar_today_rounded, date),
             const SizedBox(height: 5),
             _infoRow(Icons.access_time_rounded, slot),   // ✅ formatted time

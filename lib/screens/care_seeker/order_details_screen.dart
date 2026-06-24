@@ -35,6 +35,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   late AnimationController _anim;
   late Animation<double>   _fade;
 
+  // ── Rich green for total amount (better contrast than a washed-out success) ──
+  static const Color _totalGreen = Color(0xFF16A34A);
+
   // ── Dark mode ─────────────────────────────────────────────────────────────────
   bool get _dark => themeNotifier.value == ThemeMode.dark;
 
@@ -57,8 +60,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   bool get _hasCharge     => _serviceCharge > 0;
 
   String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? _order["category"] ?? "Service").toString();
-  bool   get _hasCarer   => (_order["caregiver_name"]?.toString().trim().isNotEmpty ?? false);
-  String get _carerPhone => _order["caregiver_phone"]?.toString() ?? "";
+
+  // ── Privacy guard: hide carer details once service is completed ───────────────
+  bool   get _hasCarer   =>
+      !_completed &&
+      (_order["caregiver_name"]?.toString().trim().isNotEmpty ?? false);
+  String get _carerPhone => _completed ? "" : (_order["caregiver_phone"]?.toString() ?? "");
 
   double? get _cLat => double.tryParse(_order["caretaker_latitude"]?.toString()  ?? "");
   double? get _cLng => double.tryParse(_order["caretaker_longitude"]?.toString() ?? "");
@@ -95,12 +102,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   };
 
   Color get _statusColor => switch (_status) {
-    "COMPLETED"                    => AppColors.success,
-    "ACCEPTED"                     => AppColors.primary,
-    "ON_THE_WAY"                   => AppColors.accent,
-    "CONFIRMED"                    => AppColors.warning,
-    "CANCELLED"                    => AppColors.danger,
-    _                              => AppColors.muted,
+    "COMPLETED"  => _totalGreen,
+    "ACCEPTED"   => AppColors.primary,
+    "ON_THE_WAY" => AppColors.accent,
+    "CONFIRMED"  => AppColors.warning,
+    "CANCELLED"  => AppColors.danger,
+    _            => AppColors.muted,
   };
 
   String get _statusLabel => switch (_status) {
@@ -708,7 +715,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                 ),
               ]),
               MarkerLayer(markers: [
-                // Carer marker
                 Marker(
                   point: carer, width: 80, height: 80,
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -739,7 +745,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                     ),
                   ]),
                 ),
-                // User marker
                 Marker(
                   point: user, width: 64, height: 64,
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -871,8 +876,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       _div(),
       const SizedBox(height: 16),
 
-      // ── Carer info ────────────────────────────────────────────────────────────
-      if (_hasCarer) ...[
+      // ── Carer info — hidden once completed ───────────────────────────────────
+      if (_completed)
+        _privacyBlock()
+      else if (_hasCarer) ...[
         Row(children: [
           Container(
             width: 48, height: 48,
@@ -953,6 +960,61 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     ]));
   }
 
+  // ── Privacy Block (shown when service is COMPLETED) ───────────────────────────
+  Widget _privacyBlock() => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: _dark
+          ? Colors.white.withOpacity(0.04)
+          : const Color(0xFFF1F5F9),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: _dark
+            ? Colors.white.withOpacity(0.08)
+            : const Color(0xFFCBD5E1),
+      ),
+    ),
+    child: Row(children: [
+      Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(
+          color: _dark
+              ? Colors.white.withOpacity(0.07)
+              : const Color(0xFFE2E8F0),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          Icons.lock_rounded,
+          color: _dark ? Colors.white38 : const Color(0xFF94A3B8),
+          size: 22,
+        ),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+            "Caretaker details hidden",
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: _dark ? Colors.white70 : const Color(0xFF475569),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            "Contact information is blocked after service completion to protect caretaker privacy.",
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.45,
+              color: _dark ? Colors.white38 : const Color(0xFF94A3B8),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ]),
+      ),
+    ]),
+  );
+
   // ── Payment Card ──────────────────────────────────────────────────────────────
   Widget _paymentCard() {
     final method  = (_order["payment_method"] ?? "COD").toString();
@@ -1006,9 +1068,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         ]),
         _div(),
       ],
-      _row(Icons.currency_rupee_rounded,
-          _hasCharge ? "Total (incl. charge)" : "Total Amount",
-          "₹$_total", vc: _statusColor, large: true),
+
+      // ── Total amount row — prominent with deep green ──────────────────────────
+      _totalRow(_hasCharge ? "Total (incl. charge)" : "Total Amount", "₹$_total"),
+
       _div(),
       _row(Icons.payment_outlined, "Payment Method", method),
       _div(),
@@ -1022,7 +1085,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         _div(),
         _row(Icons.account_balance_wallet_outlined, "Refund Amount", "₹$rAmt",
             vc: switch (rStatus) {
-              "REFUNDED" => AppColors.success,
+              "REFUNDED" => _totalGreen,
               "REJECTED" => AppColors.danger,
               _          => AppColors.warning,
             }),
@@ -1031,6 +1094,55 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       ],
     ]));
   }
+
+  // ── Dedicated total row with stronger green treatment ─────────────────────────
+  Widget _totalRow(String label, String val) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    decoration: BoxDecoration(
+      color: _totalGreen.withOpacity(_dark ? 0.10 : 0.07),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: _totalGreen.withOpacity(0.22)),
+    ),
+    child: Row(children: [
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _totalGreen.withOpacity(0.13),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(Icons.currency_rupee_rounded, color: _totalGreen, size: 18),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: TextStyle(
+                  color: _totalGreen.withOpacity(0.75),
+                  fontSize: 12, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 3),
+          Text(val,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+                color: _totalGreen,
+              )),
+        ]),
+      ),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: _totalGreen.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _totalGreen.withOpacity(0.25)),
+        ),
+        child: Text("TOTAL",
+            style: TextStyle(
+                fontSize: 10, color: _totalGreen,
+                fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+      ),
+    ]),
+  );
 
   // ── Location Card ─────────────────────────────────────────────────────────────
   Widget _locationCard() => _card(child: Column(children: [
@@ -1143,7 +1255,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
             Center(child: _handle()),
 
-            // Title
             Row(children: [
               Container(
                 padding: const EdgeInsets.all(9),
@@ -1162,7 +1273,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
             const SizedBox(height: 16),
 
-            // Refund preview
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
@@ -1222,7 +1332,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
             const SizedBox(height: 12),
 
-            // Cancellation policy
             GestureDetector(
               onTap: () => Navigator.push(context,
                   MaterialPageRoute(builder: (_) => const CancellationPolicyScreen())),
@@ -1263,7 +1372,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
             const SizedBox(height: 16),
 
-            // Reason input
             Text("Reason for cancellation",
                 style: TextStyle(
                     fontWeight: FontWeight.w700, fontSize: 13, color: _subText)),
@@ -1294,7 +1402,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
             const SizedBox(height: 18),
 
-            // Buttons
             Row(children: [
               Expanded(
                 child: OutlinedButton(
@@ -1381,7 +1488,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
             Text("₹${(amount as num).toStringAsFixed(0)}",
                 style: const TextStyle(
                     fontSize: 38, fontWeight: FontWeight.w900,
-                    color: AppColors.primary)),
+                    color: _totalGreen)),
             const SizedBox(height: 4),
             Text("$pct% of service amount",
                 style: TextStyle(color: AppColors.muted, fontSize: 13)),
@@ -1525,9 +1632,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   Widget _refundBadge(String status) {
     final (c, i, l) = switch (status.toUpperCase()) {
       "PENDING"  => (AppColors.warning, Icons.hourglass_top_rounded,        "Refund Under Review"),
-      "REFUNDED" => (AppColors.success, Icons.check_circle_outline_rounded, "Refund Processed"),
-      "REJECTED" => (AppColors.danger,  Icons.cancel_outlined,              "Refund Rejected"),
-      _          => (AppColors.muted,   Icons.info_outline_rounded,         status),
+      "REFUNDED" => (_totalGreen,       Icons.check_circle_outline_rounded,  "Refund Processed"),
+      "REJECTED" => (AppColors.danger,  Icons.cancel_outlined,               "Refund Rejected"),
+      _          => (AppColors.muted,   Icons.info_outline_rounded,          status),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),

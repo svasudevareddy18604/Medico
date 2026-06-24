@@ -243,6 +243,13 @@ router.post("/place", async (req, res) => {
         );
       }
 
+      // Build service name straight from the items in this group —
+      // no need to wait on a second DB query later, and this guarantees
+      // the field actually exists on the object passed to notification/email senders.
+      const serviceNamesForOrder =
+        groupItems.map((i) => i.name || i.service_name).filter(Boolean).join(", ") ||
+        category;
+
       createdOrders.push({
         order_id:      orderId,       // snake_case so Flutter reads it correctly
         order_code:    orderCode,
@@ -250,6 +257,7 @@ router.post("/place", async (req, res) => {
         subtotal,
         service_charge: serviceCharge,
         total,
+        service_name:  serviceNamesForOrder,
       });
     }
 
@@ -270,10 +278,14 @@ router.post("/place", async (req, res) => {
         );
         const dateStr = fmtDate(date);
         for (const ord of createdOrders) {
-          const serviceName = await getServiceName(ord.order_id);
+          // service_name is already populated on ord — no extra query needed,
+          // and this avoids relying on getServiceName() which can return
+          // nothing if order_items insert + this query race in any edge case.
+          const serviceName = ord.service_name || (await getServiceName(ord.order_id));
           await sendBookingConfirmedToUser({
             user,
             order: ord,
+            bookingId: ord.order_code,   // explicit, in case the template reads bookingId
             serviceName,
             dateStr,
             slot,
@@ -281,6 +293,7 @@ router.post("/place", async (req, res) => {
           });
           await sendBookingAlertToCaretakers({
             order: ord,
+            bookingId: ord.order_code,
             serviceName,
             dateStr,
             slot,

@@ -30,6 +30,9 @@ class _OrdersScreenState extends State<OrdersScreen>
 
   bool get _dark => themeNotifier.value == ThemeMode.dark;
 
+  // ── Deep green for COMPLETED ───────────────────────────────────────────
+  static const Color _completedGreen = Color(0xFF16A34A);
+
   // ── Status config ─────────────────────────────────────────────────────
 
   static const _filters = [
@@ -53,7 +56,7 @@ class _OrdersScreenState extends State<OrdersScreen>
   };
 
   static Color _statusColor(String s) => switch (s.toUpperCase()) {
-    "COMPLETED"   => AppColors.success,
+    "COMPLETED"   => _completedGreen,   // ← was AppColors.success (too light)
     "ACCEPTED"    => AppColors.primary,
     "IN_PROGRESS" => AppColors.secondary,
     "ON_THE_WAY"  => AppColors.accent,
