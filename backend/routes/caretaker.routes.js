@@ -503,6 +503,54 @@ router.post("/mark-payment-received", async (req, res) => {
   }
 });
 
+router.put("/profile/availability/:id", async (req, res) => {
+  const { id } = req.params;
+  const { is_available } = req.body;
+
+  try {
+    // ── LOCK CHECK ──────────────────────────────────────────
+    const [[profile]] = await db.query(
+      "SELECT availability_locked FROM caretaker_profiles WHERE user_id = ?",
+      [id]
+    );
+
+    if (!profile) 
+      return res.status(404).json({ success: false, message: "Profile not found" });
+
+    if (profile.availability_locked === 1) {
+      return res.status(403).json({
+        success: false,
+        message: "Your availability is locked by admin. Contact admin to reactivate.",
+        locked: true,
+      });
+    }
+    // ── END LOCK CHECK ──────────────────────────────────────
+
+    const newVal = Number(is_available) === 1 ? 1 : 0;
+    const tsCol  = newVal ? "last_available_at" : "last_unavailable_at";
+
+    await db.query(
+      `UPDATE caretaker_profiles 
+          SET is_available = ?, ${tsCol} = NOW()
+        WHERE user_id = ?`,
+      [newVal, id]
+    );
+
+    // upsert daily snapshot
+    await db.query(
+      `INSERT INTO caregiver_daily_status (caregiver_id, status_date, is_available)
+       VALUES (?, CURDATE(), ?)
+       ON DUPLICATE KEY UPDATE is_available = VALUES(is_available)`,
+      [id, newVal]
+    );
+
+    return res.json({ success: true, message: newVal ? "You are now available" : "You are now unavailable" });
+  } catch (err) {
+    console.error("TOGGLE AVAILABILITY ERROR:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 
 router.post("/update-location", async (req, res) => {
 

@@ -561,6 +561,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
               Expanded(
                   child: Text(
                       o["order_code"] ?? "#${o["id"] ?? ""}",
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 13,
@@ -591,7 +592,8 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                     color: Colors.red.shade50,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: Colors.red.shade100)),
-                child: Row(children: [
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                   const Icon(Icons.info_outline,
                       size: 13, color: Colors.red),
                   const SizedBox(width: 6),
@@ -633,7 +635,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
               color: Colors.black.withOpacity(0.05))
         ],
       ),
-      child: Row(children: [
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
           width: 42,
           height: 42,
@@ -649,6 +651,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
           Text("Order #${e["order_id"] ?? ""}",
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
@@ -656,8 +659,10 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
           const SizedBox(height: 3),
           Text(
               "Total ₹${e["total_amount"] ?? 0}  •  Commission ₹${e["commission"] ?? 0}",
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 11, color: Colors.grey[500])),
         ])),
+        const SizedBox(width: 8),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Text("₹${e["caretaker_amount"] ?? 0}",
               style: const TextStyle(
@@ -737,6 +742,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
         onPressed: onTap,
         icon: Icon(icon, color: Colors.white, size: 18),
         label: Text(label,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
@@ -778,12 +784,14 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                 color: AppColors.primary, size: 18),
           ),
           const SizedBox(width: 10),
-          const Text("Daily Availability",
-              style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E))),
-          const Spacer(),
+          const Expanded(
+            child: Text("Daily Availability",
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1A1A2E))),
+          ),
+          const SizedBox(width: 8),
           // Today's status badge
           Container(
             padding:
@@ -841,7 +849,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                     ? Colors.green.shade200
                     : Colors.red.shade200),
           ),
-          child: Row(children: [
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Container(
               width: 52,
               height: 52,
@@ -875,26 +883,40 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                         : Colors.red.shade700),
               ),
               const SizedBox(height: 4),
+              // FIX: wrap icon+text in Row(crossAxisAlignment: start) with
+              // Expanded around the Text so long copy wraps to a 2nd line
+              // instead of overflowing horizontally.
               if (availabilityLocked && !isAvailable)
-                Row(children: [
-                  Icon(Icons.lock_rounded,
-                      size: 11, color: Colors.orange.shade700),
-                  const SizedBox(width: 4),
-                  Text("Locked — Admin action required to reactivate",
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.orange.shade700,
-                          fontWeight: FontWeight.w600)),
-                ])
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.lock_rounded,
+                        size: 11, color: Colors.orange.shade700),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        "Locked — Admin action required to reactivate",
+                        softWrap: true,
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.orange.shade700,
+                            fontWeight: FontWeight.w600,
+                            height: 1.3),
+                      ),
+                    ),
+                  ],
+                )
               else if (!isAvailable && lastUnavailableAt.isNotEmpty)
                 Text(
                   "Offline since: ${_formatDate(lastUnavailableAt)}",
+                  softWrap: true,
                   style: TextStyle(
                       fontSize: 11, color: Colors.grey[600]),
                 )
               else if (isAvailable && lastAvailableAt.isNotEmpty)
                 Text(
                   "Online since: ${_formatDate(lastAvailableAt)}",
+                  softWrap: true,
                   style: TextStyle(
                       fontSize: 11, color: Colors.grey[600]),
                 ),
@@ -914,7 +936,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: warningColor.withOpacity(0.3)),
             ),
-            child: Row(children: [
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Icon(
                 overOneMonth
                     ? Icons.warning_rounded
@@ -929,6 +951,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                       children: [
                 Text(
                   "Inactive for $inactiveDays day${inactiveDays == 1 ? '' : 's'}",
+                  softWrap: true,
                   style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
@@ -937,6 +960,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                 if (overOneMonth)
                   Text(
                     "Auto-locked: inactive > 30 days. Only admin can reactivate.",
+                    softWrap: true,
                     style: TextStyle(
                         fontSize: 11,
                         color: warningColor.withOpacity(0.85)),
@@ -944,6 +968,7 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                 else if (nearOneMonth)
                   Text(
                     "Will be auto-locked after 30 days of inactivity.",
+                    softWrap: true,
                     style: TextStyle(
                         fontSize: 11,
                         color: warningColor.withOpacity(0.85)),
@@ -1007,63 +1032,75 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
         30, (i) => today.subtract(Duration(days: 29 - i)));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(
-        spacing: 5,
-        runSpacing: 5,
-        children: days.map((d) {
-          final key =
-              "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
-          final isToday = (d.day == today.day &&
-              d.month == today.month &&
-              d.year == today.year);
-          final hasData = statusMap.containsKey(key);
-          final avail  = hasData ? statusMap[key]! : null;
+      // FIX: use a fixed-column GridView-like Wrap with computed cell width
+      // so the 7/8 dots-per-row layout is always consistent and never
+      // depends on parent width quirks. LayoutBuilder keeps it responsive.
+      LayoutBuilder(builder: (context, constraints) {
+        const int columns = 10;
+        const double spacing = 5;
+        final double cellSize =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
 
-          Color bgColor;
-          if (!hasData)      bgColor = const Color(0xFFEEEEEE);
-          else if (avail!)   bgColor = Colors.green.shade400;
-          else               bgColor = Colors.red.shade300;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: days.map((d) {
+            final key =
+                "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+            final isToday = (d.day == today.day &&
+                d.month == today.month &&
+                d.year == today.year);
+            final hasData = statusMap.containsKey(key);
+            final avail  = hasData ? statusMap[key]! : null;
 
-          return Tooltip(
-            message: "$key: ${!hasData ? 'No data' : (avail! ? 'Available' : 'Unavailable')}",
-            child: Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: bgColor,
-                borderRadius: BorderRadius.circular(5),
-                border: isToday
-                    ? Border.all(color: AppColors.primary, width: 2)
+            Color bgColor;
+            if (!hasData)      bgColor = const Color(0xFFEEEEEE);
+            else if (avail!)   bgColor = Colors.green.shade400;
+            else               bgColor = Colors.red.shade300;
+
+            return Tooltip(
+              message:
+                  "$key: ${!hasData ? 'No data' : (avail! ? 'Available' : 'Unavailable')}",
+              child: Container(
+                width: cellSize,
+                height: cellSize,
+                decoration: BoxDecoration(
+                  color: bgColor,
+                  borderRadius: BorderRadius.circular(5),
+                  border: isToday
+                      ? Border.all(color: AppColors.primary, width: 2)
+                      : null,
+                ),
+                child: isToday
+                    ? Center(
+                        child: Icon(Icons.circle,
+                            size: cellSize * 0.3,
+                            color: Colors.white.withOpacity(0.9)))
                     : null,
               ),
-              child: isToday
-                  ? Icon(Icons.circle, size: 8,
-                      color: Colors.white.withOpacity(0.9))
-                  : null,
-            ),
-          );
-        }).toList(),
-      ),
+            );
+          }).toList(),
+        );
+      }),
       const SizedBox(height: 10),
       // Legend
-      Row(children: [
+      Wrap(spacing: 12, runSpacing: 6, children: [
         _legendDot(Colors.green.shade400, "Available"),
-        const SizedBox(width: 12),
         _legendDot(Colors.red.shade300, "Unavailable"),
-        const SizedBox(width: 12),
         _legendDot(const Color(0xFFEEEEEE), "No data"),
-        const SizedBox(width: 12),
-        Container(
-          width: 14,
-          height: 14,
-          decoration: BoxDecoration(
-              color: const Color(0xFFEEEEEE),
-              borderRadius: BorderRadius.circular(3),
-              border: Border.all(color: AppColors.primary, width: 2)),
-        ),
-        const SizedBox(width: 4),
-        Text("Today",
-            style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+                color: const Color(0xFFEEEEEE),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: AppColors.primary, width: 2)),
+          ),
+          const SizedBox(width: 4),
+          Text("Today",
+              style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+        ]),
       ]),
     ]);
   }
@@ -1144,12 +1181,14 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Text("Caregiver Details",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 19,
-                        fontWeight: FontWeight.bold)),
-                const Spacer(),
+                const Expanded(
+                  child: Text("Caregiver Details",
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 19,
+                          fontWeight: FontWeight.bold)),
+                ),
                 // Blocked badge
                 if (isBlocked)
                   Container(
@@ -1205,26 +1244,41 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                 ]),
 
                 const SizedBox(height: 12),
-                Text(
-                  "${user["first_name"] ?? ""} ${user["last_name"] ?? ""}"
-                      .trim(),
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(
+                    "${user["first_name"] ?? ""} ${user["last_name"] ?? ""}"
+                        .trim(),
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold),
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(user["mobile"] ?? "",
                     style: const TextStyle(
                         color: Colors.white70, fontSize: 13)),
-                Text(user["email"] ?? "",
-                    style: const TextStyle(
-                        color: Colors.white60, fontSize: 12)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(user["email"] ?? "",
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: const TextStyle(
+                          color: Colors.white60, fontSize: 12)),
+                ),
                 const SizedBox(height: 12),
 
                 // Status pills row
-                Row(mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
                   // Account status pill
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -1255,8 +1309,6 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                               fontWeight: FontWeight.w600)),
                     ]),
                   ),
-
-                  const SizedBox(width: 8),
 
                   // Online/Offline pill
                   Container(

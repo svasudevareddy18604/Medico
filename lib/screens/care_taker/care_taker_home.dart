@@ -34,7 +34,8 @@ class _CareTakerHomeState extends State<CareTakerHome>
   int totalReviews = 0;
 
   // ── Availability ───────────────────────────────────────────────────────────
-  bool isAvailable = false;
+  bool isAvailable        = false;
+  bool availabilityLocked = false; // ← NEW: set by admin, blocks self-toggle
   bool togglingAvailability = false;
 
   // ── Pulse animation for availability indicator ─────────────────────────────
@@ -95,9 +96,9 @@ class _CareTakerHomeState extends State<CareTakerHome>
         if (data["success"] == true && mounted) {
           setState(() {
             earnings = {
-              "total": data["data"]["total"] ?? 0,
+              "total":   data["data"]["total"]   ?? 0,
               "pending": data["data"]["pending"] ?? 0,
-              "paid": data["data"]["paid"] ?? 0,
+              "paid":    data["data"]["paid"]    ?? 0,
             };
           });
         }
@@ -115,7 +116,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
       final data = jsonDecode(res.body);
       if (data["success"] == true && mounted) {
         setState(() {
-          avgRating = double.tryParse(data["avgRating"].toString()) ?? 0.0;
+          avgRating    = double.tryParse(data["avgRating"].toString()) ?? 0.0;
           totalReviews = data["total"] ?? 0;
         });
       }
@@ -130,10 +131,10 @@ class _CareTakerHomeState extends State<CareTakerHome>
         final data = jsonDecode(res.body);
         if (mounted) {
           setState(() {
-            profileImage = data["profile_image"] ?? "";
-            loadingProfile = false;
-            // ✅ Load availability from profile API
-            isAvailable = (data["is_available"] == 1 || data["is_available"] == true);
+            profileImage        = data["profile_image"] ?? "";
+            loadingProfile      = false;
+            isAvailable         = (data["is_available"]        == 1 || data["is_available"]        == true);
+            availabilityLocked  = (data["availability_locked"] == 1 || data["availability_locked"] == true);
           });
         }
       } else {
@@ -152,16 +153,22 @@ class _CareTakerHomeState extends State<CareTakerHome>
       if (data["success"] == true && data["address"] != null) {
         final addr = data["address"];
         if (mounted) {
-          setState(() =>
-              addressText =
-                  "${addr["address_line"]}, ${addr["area"]}, ${addr["pincode"]}");
+          setState(() => addressText =
+              "${addr["address_line"]}, ${addr["area"]}, ${addr["pincode"]}");
         }
       }
     } catch (_) {}
   }
 
-  // ✅ Toggle availability — calls PUT /api/caretaker-profile/availability/:userId
+  // ── Toggle availability ────────────────────────────────────────────────────
+  // If admin has locked this caregiver, show a dialog instead of toggling.
   Future<void> toggleAvailability() async {
+    // ── GUARD: admin lock ──────────────────────────────────────────────────
+    if (availabilityLocked) {
+  _showLockedDialog();
+  return;
+}
+
     if (togglingAvailability) return;
     setState(() => togglingAvailability = true);
 
@@ -181,7 +188,13 @@ class _CareTakerHomeState extends State<CareTakerHome>
           _showAvailabilitySnackbar(newVal == 1);
         }
       } else {
-        _showErrorSnackbar();
+        // Backend may also return 403/locked — re-fetch to sync state
+        await loadProfile();
+        if (availabilityLocked) {
+          _showLockedDialog();
+         } else {
+           _showErrorSnackbar();
+         }
       }
     } catch (_) {
       _showErrorSnackbar();
@@ -190,6 +203,107 @@ class _CareTakerHomeState extends State<CareTakerHome>
     }
   }
 
+  // ── Admin-lock dialog ──────────────────────────────────────────────────────
+  void _showLockedDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.lock_rounded,
+                    color: Colors.orange.shade700, size: 36),
+              ),
+              const SizedBox(height: 20),
+
+              // Title
+              const Text(
+                "Account Locked",
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1A1A2E)),
+              ),
+              const SizedBox(height: 12),
+
+              // Body
+              Text(
+                "Your availability has been locked by the admin.\n\n"
+                "You cannot go online on your own. Please contact the Medico admin team to reactivate your account.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 13.5,
+                    color: Colors.grey.shade700,
+                    height: 1.55),
+              ),
+              const SizedBox(height: 8),
+
+              // Info pill
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.support_agent_rounded,
+                        size: 15, color: Colors.orange.shade700),
+                    const SizedBox(width: 6),
+                    Text(
+                      "Contact Admin to reactivate",
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade800,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // OK button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange.shade700,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Understood",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Snackbars ──────────────────────────────────────────────────────────────
   void _showAvailabilitySnackbar(bool available) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -197,7 +311,8 @@ class _CareTakerHomeState extends State<CareTakerHome>
         backgroundColor: available
             ? const Color(0xFF00C853)
             : const Color(0xFFD32F2F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
         content: Row(children: [
           Icon(
@@ -223,7 +338,8 @@ class _CareTakerHomeState extends State<CareTakerHome>
       SnackBar(
         behavior: SnackBarBehavior.floating,
         backgroundColor: Colors.red.shade700,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
         content: const Text("Failed to update availability. Try again.",
             style: TextStyle(color: Colors.white)),
@@ -305,15 +421,22 @@ class _CareTakerHomeState extends State<CareTakerHome>
     );
   }
 
-  // ─────────────────────────── AVAILABILITY CARD ─────────────────────────────
+  // ─────────────────────── AVAILABILITY CARD ─────────────────────────────────
 
   Widget _buildAvailabilityCard() {
-    final Color activeColor = const Color(0xFF00C853);
+    // When locked + offline → special locked style
+    final bool isLocked = availabilityLocked;
+
+    final Color activeColor   = const Color(0xFF00C853);
     final Color inactiveColor = const Color(0xFFD32F2F);
-    final Color currentColor = isAvailable ? activeColor : inactiveColor;
-    final Color currentBg = isAvailable
-        ? const Color(0xFFE8F5E9)
-        : const Color(0xFFFFEBEE);
+    final Color lockedColor   = Colors.orange.shade700;
+
+    final Color currentColor = isLocked
+        ? lockedColor
+        : (isAvailable ? activeColor : inactiveColor);
+    final Color currentBg = isLocked
+        ? Colors.orange.shade50
+        : (isAvailable ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
@@ -329,147 +452,213 @@ class _CareTakerHomeState extends State<CareTakerHome>
           ),
         ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-        child: Row(
-          children: [
-            // ── Pulse dot + icon ──────────────────────────────────────────
-            Stack(
-              alignment: Alignment.center,
+      child: Column(
+        children: [
+          // ── Main row ──────────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+            child: Row(
               children: [
-                if (isAvailable)
-                  ScaleTransition(
-                    scale: _pulseAnimation,
-                    child: Container(
-                      width: 54,
-                      height: 54,
-                      decoration: BoxDecoration(
-                        color: activeColor.withOpacity(0.18),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: currentColor,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: currentColor.withOpacity(0.4),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    isAvailable
-                        ? Icons.wifi_tethering_rounded
-                        : Icons.wifi_tethering_off_rounded,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(width: 16),
-
-            // ── Status text ───────────────────────────────────────────────
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isAvailable ? "You're Online" : "You're Offline",
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: currentColor,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    isAvailable
-                        ? "Visible to CareSeekers · Accepting Services"
-                        : "Hidden from CareSeekers · Not accepting Services",
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      color: currentColor.withOpacity(0.75),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(width: 12),
-
-            // ── Toggle switch ─────────────────────────────────────────────
-            togglingAvailability
-                ? SizedBox(
-                    width: 44,
-                    height: 26,
-                    child: Center(
-                      child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: currentColor,
+                // ── Pulse dot + icon ────────────────────────────────────────
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (isAvailable && !isLocked)
+                      ScaleTransition(
+                        scale: _pulseAnimation,
+                        child: Container(
+                          width: 54,
+                          height: 54,
+                          decoration: BoxDecoration(
+                            color: activeColor.withOpacity(0.18),
+                            shape: BoxShape.circle,
+                          ),
                         ),
                       ),
-                    ),
-                  )
-                : GestureDetector(
-                    onTap: toggleAvailability,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 280),
-                      curve: Curves.easeInOut,
-                      width: 54,
-                      height: 30,
+                    Container(
+                      width: 44,
+                      height: 44,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(15),
-                        color: isAvailable ? activeColor : Colors.grey.shade300,
+                        color: currentColor,
+                        shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: isAvailable
-                                ? activeColor.withOpacity(0.35)
-                                : Colors.black12,
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
+                            color: currentColor.withOpacity(0.4),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
                           ),
                         ],
                       ),
-                      child: AnimatedAlign(
-                        duration: const Duration(milliseconds: 280),
-                        curve: Curves.easeInOut,
-                        alignment: isAvailable
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.all(3),
-                          width: 24,
-                          height: 24,
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black26,
-                                blurRadius: 4,
-                                offset: Offset(0, 1),
-                              ),
-                            ],
-                          ),
-                        ),
+                      child: Icon(
+                        isLocked
+                            ? Icons.lock_rounded
+                            : (isAvailable
+                                ? Icons.wifi_tethering_rounded
+                                : Icons.wifi_tethering_off_rounded),
+                        color: Colors.white,
+                        size: 22,
                       ),
                     ),
+                  ],
+                ),
+
+                const SizedBox(width: 16),
+
+                // ── Status text ─────────────────────────────────────────────
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isLocked
+                            ? "Account Locked"
+                            : (isAvailable ? "You're Online" : "You're Offline"),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: currentColor,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        isLocked
+                            ? "Admin has restricted your access"
+                            : (isAvailable
+                                ? "Visible to CareSeekers · Accepting Services"
+                                : "Hidden from CareSeekers · Not accepting Services"),
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: currentColor.withOpacity(0.75),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
-          ],
-        ),
+                ),
+
+                const SizedBox(width: 12),
+
+                // ── Toggle switch OR lock icon ───────────────────────────────
+                togglingAvailability
+                    ? SizedBox(
+                        width: 44,
+                        height: 26,
+                        child: Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: currentColor,
+                            ),
+                          ),
+                        ),
+                      )
+                    : isLocked
+                        // ── Locked: tap to show info dialog ─────────────────
+                        ? GestureDetector(
+                            onTap: _showLockedDialog,
+                            child: Container(
+                              width: 54,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(15),
+                                color: Colors.orange.shade200,
+                              ),
+                              child: Center(
+                                child: Icon(Icons.lock_rounded,
+                                    size: 16,
+                                    color: Colors.orange.shade800),
+                              ),
+                            ),
+                          )
+                        // ── Normal toggle ────────────────────────────────────
+                        : GestureDetector(
+                            onTap: toggleAvailability,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 280),
+                              curve: Curves.easeInOut,
+                              width: 54,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(15),
+                                color: isAvailable
+                                    ? activeColor
+                                    : Colors.grey.shade300,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: isAvailable
+                                        ? activeColor.withOpacity(0.35)
+                                        : Colors.black12,
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: AnimatedAlign(
+                                duration: const Duration(milliseconds: 280),
+                                curve: Curves.easeInOut,
+                                alignment: isAvailable
+                                    ? Alignment.centerRight
+                                    : Alignment.centerLeft,
+                                child: Container(
+                                  margin: const EdgeInsets.all(3),
+                                  width: 24,
+                                  height: 24,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black26,
+                                        blurRadius: 4,
+                                        offset: Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+              ],
+            ),
+          ),
+
+          // ── Locked banner (shown below main row when locked) ───────────────
+          if (isLocked)
+            Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade100,
+                borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(20)),
+                border: Border(
+                    top: BorderSide(color: Colors.orange.shade200)),
+              ),
+              child: Row(children: [
+                Icon(Icons.support_agent_rounded,
+                    size: 16, color: Colors.orange.shade800),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Contact Medico admin to reactivate your account.",
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: _showLockedDialog,
+                  child: Icon(Icons.info_outline_rounded,
+                      size: 18, color: Colors.orange.shade700),
+                ),
+              ]),
+            ),
+        ],
       ),
     );
   }
@@ -484,7 +673,8 @@ class _CareTakerHomeState extends State<CareTakerHome>
           child: RefreshIndicator(
             color: AppColors.primary,
             onRefresh: () async {
-              await Future.wait([loadEarnings(), loadRating(), loadProfile()]);
+              await Future.wait(
+                  [loadEarnings(), loadRating(), loadProfile()]);
             },
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -492,7 +682,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
               child: Column(
                 children: [
 
-                  // ✅ AVAILABILITY STATUS CARD — prominent, top of home
+                  // ── AVAILABILITY STATUS CARD ─────────────────────────────
                   _buildAvailabilityCard(),
 
                   // ── Welcome card ─────────────────────────────────────────
@@ -513,8 +703,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                         radius: 28,
                         backgroundColor:
                             AppColors.primary.withOpacity(0.15),
-                        child:
-                            Icon(Icons.person, color: AppColors.primary),
+                        child: Icon(Icons.person, color: AppColors.primary),
                       ),
                       const SizedBox(width: 15),
                       Column(
@@ -548,21 +737,16 @@ class _CareTakerHomeState extends State<CareTakerHome>
                   // ── Earnings cards ────────────────────────────────────────
                   Row(children: [
                     Expanded(
-                      child: _statCard(
-                        "Total",
-                        "₹${earnings["total"]}",
-                        Colors.green,
-                        Icons.trending_up,
-                      ),
+                      child: _statCard("Total", "₹${earnings["total"]}",
+                          Colors.green, Icons.trending_up),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: _statCard(
-                        "Pending",
-                        "₹${earnings["pending"]}",
-                        Colors.orange,
-                        Icons.warning_amber_rounded,
-                      ),
+                          "Pending",
+                          "₹${earnings["pending"]}",
+                          Colors.orange,
+                          Icons.warning_amber_rounded),
                     ),
                   ]),
 
