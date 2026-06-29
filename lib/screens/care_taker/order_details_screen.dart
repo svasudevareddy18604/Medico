@@ -544,7 +544,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                     ),
                   ),
                 ),
-                if (_hasDocs)
+                // Doc badge in header — hidden once completed, since
+                // documents are restricted at that point.
+                if (_hasDocs && !_isCompleted)
                   AnimatedBuilder(
                     animation: _docGlow,
                     builder: (_, __) => Container(
@@ -777,7 +779,13 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                   const SizedBox(height: 14),
 
                   // ── Medical documents ──────────────────────────────
-                  if (_hasDocs && _docUrls.isNotEmpty) ...[
+                  // Once the service is COMPLETED, documents are fully
+                  // locked — caretaker can no longer view/open them.
+                  // Before completion, behaves exactly as before.
+                  if (_isCompleted) ...[
+                    if (_hasDocs) _docsRestrictedBox(),
+                    const SizedBox(height: 14),
+                  ] else if (_hasDocs && _docUrls.isNotEmpty) ...[
                     AnimatedBuilder(
                       animation: _docGlow,
                       builder: (_, child) => Container(
@@ -1322,6 +1330,55 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                 SizedBox(height: 3),
                 Text(
                   "Name and contact info are hidden for privacy. Contact admin if needed.",
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ]),
+      );
+
+  // ── Medical Documents Restricted Box (themed) ──────────────────
+  // Shown instead of the document tiles once the service is COMPLETED.
+  // Caretaker can no longer open/view patient medical documents.
+  Widget _docsRestrictedBox() => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2))],
+        ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.folder_off_rounded,
+                color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Medical Documents Restricted",
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: Colors.black87),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  "🔒  Patient documents are hidden once the service is completed.",
                   style: TextStyle(color: Colors.grey, fontSize: 12),
                 ),
               ],
