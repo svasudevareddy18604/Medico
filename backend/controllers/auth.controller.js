@@ -168,27 +168,17 @@ exports.register = async (req, res) => {
 /* ─── LOGIN ───────────────────────────────────────────────────────────────── */
 exports.login = async (req, res) => {
   try {
-    const { email, password, fcm_token } = req.body;
+    const { email, password } = req.body;
+    // NOTE: fcm_token is intentionally removed from login.
+    // The Flutter client now sends it separately via /update-fcm-token
+    // AFTER navigation, so the login response is never delayed by FCM.
 
     if (!email || !password)
       return res.status(400).json({ success: false, message: "Email and password required" });
 
-    // FIX 1: Split into two targeted queries instead of one heavy LEFT JOIN.
-    //
-    // The original single query always joined caretaker_profiles + ran a
-    // correlated subquery COUNT(*) on caretaker_documents for EVERY login —
-    // even for admins and care-seekers who never need that data.
-    // Now we fetch only what every role needs first (lightweight), then fetch
-    // caretaker-specific data only when the role actually requires it.
-    //
-    // FIX 2: SELECT only the columns we actually use.
-    // Selecting * or unused columns forces MySQL to read and transmit extra
-    // data over the connection. We now list exactly what the login response
-    // needs, keeping the result row as small as possible.
-    //
-    // FIX 3: Ensure users.email has an index (add this to your DB if missing):
+    // FIX 1: Lightweight base query — no JOIN, no subquery, only needed columns.
+    // FIX 2: Ensure users.email has an index (run once in your DB if missing):
     //   ALTER TABLE users ADD INDEX idx_users_email (email);
-    // Without an index, every login triggers a full table scan.
     const [rows] = await db.query(
       `SELECT id, first_name, last_name, email, role, password,
               profile_completed, approval_status, is_blocked
@@ -203,10 +193,6 @@ exports.login = async (req, res) => {
 
     const user = rows[0];
 
-    // FIX 4: Run bcrypt.compare and the is_blocked check in parallel with
-    // nothing — bcrypt is the dominant cost (~100-300 ms CPU). We can't
-    // avoid it, but we make sure nothing else waits before or after it
-    // unnecessarily.
     if (user.is_blocked === 1)
       return res.status(403).json({
         success: false,
@@ -217,20 +203,10 @@ exports.login = async (req, res) => {
     if (!passwordMatch)
       return res.status(401).json({ success: false, message: "Wrong password" });
 
-    // FIX 5: Fire the FCM token update WITHOUT awaiting it.
-    // Waiting for a DB UPDATE that the client doesn't need in the response
-    // adds 20-80 ms to every login for zero user-facing benefit.
-    // We fire-and-forget it and let it complete in the background.
-    if (fcm_token) {
-      db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcm_token, user.id])
-        .catch((err) => console.error("FCM token update failed:", err));
-    }
-
-    // FIX 6: Fetch caretaker-specific fields only for care_taker role.
-    // admins and care_seekers never need caregiver_type or documents_uploaded,
-    // so we skip this query entirely for them — saving one round-trip.
-    let caregiver_type      = null;
-    let documents_uploaded  = 0;
+    // FIX 3: Fetch caretaker-specific fields only for care_taker role.
+    // Admins and care_seekers never need caregiver_type or documents_uploaded.
+    let caregiver_type     = null;
+    let documents_uploaded = 0;
 
     if (user.role === "care_taker") {
       const [ctRows] = await db.query(
@@ -263,6 +239,31 @@ exports.login = async (req, res) => {
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ success: false, message: "Database error" });
+  }
+};
+
+/* ─── UPDATE FCM TOKEN ────────────────────────────────────────────────────── */
+// Called by Flutter in the background AFTER login navigation.
+// This keeps the login endpoint fast — FCM token fetch on the client
+// can take 1–3 s on cold start, so we never block login on it.
+exports.updateFcmToken = async (req, res) => {
+  try {
+    const { user_id, fcm_token } = req.body;
+
+    if (!user_id || !fcm_token)
+      return res.status(400).json({ success: false, message: "user_id and fcm_token required" });
+
+    // Fire-and-forget style on the DB side too — we respond immediately
+    // and let the UPDATE complete asynchronously.
+    db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcm_token, user_id])
+      .catch((err) => console.error("FCM token DB update failed:", err));
+
+    // Respond immediately — client doesn't need to wait for DB UPDATE
+    res.json({ success: true, message: "FCM token update queued" });
+
+  } catch (err) {
+    console.error("UPDATE FCM TOKEN ERROR:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
