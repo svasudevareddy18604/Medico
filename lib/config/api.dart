@@ -97,6 +97,7 @@ class Api {
   static String rejectCaregiver(int id)  => "$baseUrl/admin/caregivers/reject/$id";
   static String blockCaregiver(id)       => "$baseUrl/admin/caregivers/block/$id";
   static String unblockCaregiver(id)     => "$baseUrl/admin/caregivers/unblock/$id";
+  static String setCaregiverAvailability(int id) => "$baseUrl/admin/caregivers/$id/availability";
 
   /* ================= ADMIN SETTINGS ================= */
 
