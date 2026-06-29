@@ -33,40 +33,52 @@ const sendPush = async (token, title, body) => {
    Safe to call repeatedly (IF NOT EXISTS guards each column).
 ───────────────────────────────────────────────────────────────────────────── */
 const runMigrations = async () => {
-  const migrations = [
-    // Track when the caregiver last toggled themselves available
-    `ALTER TABLE caretaker_profiles
-       ADD COLUMN IF NOT EXISTS last_available_at DATETIME NULL`,
-
-    // Track when they last went unavailable
-    `ALTER TABLE caretaker_profiles
-       ADD COLUMN IF NOT EXISTS last_unavailable_at DATETIME NULL`,
-
-    // Admin can forcibly lock a caregiver as unavailable
-    `ALTER TABLE caretaker_profiles
-       ADD COLUMN IF NOT EXISTS availability_locked TINYINT(1) NOT NULL DEFAULT 0`,
-
-    // Daily snapshot log: one row per caregiver per calendar day
-    `CREATE TABLE IF NOT EXISTS caregiver_daily_status (
-       id           INT AUTO_INCREMENT PRIMARY KEY,
-       caregiver_id INT          NOT NULL,
-       status_date  DATE         NOT NULL,
-       is_available TINYINT(1)   NOT NULL DEFAULT 0,
-       created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       UNIQUE KEY uq_caregiver_date (caregiver_id, status_date),
-       INDEX idx_caregiver (caregiver_id),
-       INDEX idx_date      (status_date)
-     )`,
+  const columns = [
+    {
+      name: "last_available_at",
+      sql: "ALTER TABLE caretaker_profiles ADD COLUMN last_available_at DATETIME NULL",
+    },
+    {
+      name: "last_unavailable_at",
+      sql: "ALTER TABLE caretaker_profiles ADD COLUMN last_unavailable_at DATETIME NULL",
+    },
+    {
+      name: "availability_locked",
+      sql: "ALTER TABLE caretaker_profiles ADD COLUMN availability_locked TINYINT(1) NOT NULL DEFAULT 0",
+    },
   ];
 
-  for (const sql of migrations) {
-    try {
-      await db.query(sql);
-    } catch (err) {
-      // Ignore "Duplicate column" errors from DBs that don't support IF NOT EXISTS
-      if (!err.message.includes("Duplicate column")) console.error("Migration error:", err.message);
+  for (const col of columns) {
+    const [exists] = await db.query(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'caretaker_profiles'
+         AND COLUMN_NAME = ?`,
+      [col.name]
+    );
+
+    if (exists.length === 0) {
+      await db.query(col.sql);
+      console.log(`✅ Added column: ${col.name}`);
+    } else {
+      console.log(`✔ Column already exists: ${col.name}`);
     }
   }
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS caregiver_daily_status (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      caregiver_id INT NOT NULL,
+      status_date DATE NOT NULL,
+      is_available TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_caregiver_date (caregiver_id, status_date),
+      INDEX idx_caregiver (caregiver_id),
+      INDEX idx_date (status_date)
+    )
+  `);
+
   console.log("✅ Caregiver availability migrations done.");
 };
 
