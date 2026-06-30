@@ -128,7 +128,8 @@ router.post("/place", async (req, res) => {
       latitude,
       longitude,
       items,
-      service_charge,   // sent by Flutter — already calculated correctly
+      service_charge,
+      coupon_code,      // ← now read from Flutter
     } = req.body;
 
     if (!items?.length)
@@ -136,9 +137,6 @@ router.post("/place", async (req, res) => {
         .status(400)
         .json({ success: false, message: "No services selected" });
 
-    // ── SERVICE CHARGE RESOLUTION ──────────────────────────────────────────
-    // Priority 1: use value sent by Flutter (already correct)
-    // Priority 2: fall back to admin_settings if Flutter didn't send it
     let serviceCharge = parseFloat(service_charge ?? -1);
     if (isNaN(serviceCharge) || serviceCharge < 0) {
       const [[settings]] = await db
@@ -147,12 +145,60 @@ router.post("/place", async (req, res) => {
       serviceCharge = parseFloat(settings?.service_charge ?? 0);
     }
 
-    console.log(`💰 service_charge from Flutter: ${service_charge} → using: ${serviceCharge}`);
+    const cartSubtotal = items.reduce((s, i) => s + parseFloat(i.price), 0);
+
+    // ── SERVER-SIDE COUPON VALIDATION ──────────────────────────────────────
+    // Never trust a client-sent discount amount — recompute it here.
+    let appliedCoupon = null;
+    let totalDiscount = 0;
+
+    if (coupon_code) {
+      const [[coupon]] = await db.query(
+        `SELECT * FROM coupons WHERE code = ? AND is_active = 1`,
+        [coupon_code.trim().toUpperCase()]
+      );
+
+      if (coupon) {
+        const now = new Date();
+        const notStarted = coupon.start_time && now < new Date(coupon.start_time);
+        const expired     = coupon.end_time   && now > new Date(coupon.end_time);
+        const belowMin    = cartSubtotal < (coupon.min_order || 0);
+
+        let usedByUser = 0;
+        if (coupon.per_user_limit) {
+          const [[row]] = await db.query(
+            `SELECT COUNT(*) AS cnt FROM orders
+             WHERE user_id = ? AND coupon_code = ? AND status != 'CANCELLED'`,
+            [user_id, coupon.code]
+          );
+          usedByUser = row.cnt;
+        }
+        const overUserLimit  = coupon.per_user_limit && usedByUser >= coupon.per_user_limit;
+        const overUsageLimit = coupon.usage_limit && coupon.used_count >= coupon.usage_limit;
+
+        if (!notStarted && !expired && !belowMin && !overUserLimit && !overUsageLimit) {
+          let discount = coupon.discount_type === "percentage"
+            ? (cartSubtotal * coupon.discount) / 100
+            : coupon.discount;
+
+          if (coupon.max_discount) discount = Math.min(discount, coupon.max_discount);
+          discount = Math.min(discount, cartSubtotal); // never exceed subtotal
+
+          totalDiscount = discount;
+          appliedCoupon = coupon;
+        } else {
+          console.warn(`⚠️ Coupon ${coupon_code} rejected:`, {
+            notStarted, expired, belowMin, overUserLimit, overUsageLimit,
+          });
+        }
+      }
+    }
+
+    console.log(`💰 service_charge: ${serviceCharge}, discount: ${totalDiscount} (coupon: ${appliedCoupon?.code || "none"})`);
 
     conn = await db.getConnection();
     await conn.beginTransaction();
 
-    // Group items by category — each category becomes its own order
     const grouped = {};
     for (const item of items) {
       const cat = item.category || "Nurse";
@@ -160,37 +206,42 @@ router.post("/place", async (req, res) => {
     }
 
     const createdOrders = [];
+    let discountRemaining = totalDiscount;
+    const groupKeys = Object.keys(grouped);
 
-    for (const category of Object.keys(grouped)) {
+    for (let gi = 0; gi < groupKeys.length; gi++) {
+      const category   = groupKeys[gi];
       const groupItems = grouped[category];
       const orderCode  = generateOrderCode();
-      const subtotal   = groupItems.reduce(
-        (s, i) => s + parseFloat(i.price),
-        0
-      );
-      const total = subtotal + serviceCharge;
+      const subtotal   = groupItems.reduce((s, i) => s + parseFloat(i.price), 0);
 
-      const isPaid =
-        payment_method === "ONLINE" && !!payment_id;
+      // Split discount proportionally across grouped orders; dump the
+      // rounding remainder into the last group so amounts add up exactly.
+      let groupDiscount;
+      if (gi === groupKeys.length - 1) {
+        groupDiscount = discountRemaining;
+      } else {
+        groupDiscount = cartSubtotal > 0
+          ? Math.round((subtotal / cartSubtotal) * totalDiscount * 100) / 100
+          : 0;
+        discountRemaining -= groupDiscount;
+      }
 
-      /* ── CHECK SERVICES THAT REQUIRE DOCUMENTS ── */
+      const total = Math.max(0, subtotal + serviceCharge - groupDiscount);
+      const isPaid = payment_method === "ONLINE" && !!payment_id;
+
       const serviceIds = groupItems.map((item) => item.service_id);
-
       const [requiredServices] = await conn.query(
-        `SELECT id, name
-         FROM services
-         WHERE id IN (?) AND requires_documents = 1`,
+        `SELECT id, name FROM services WHERE id IN (?) AND requires_documents = 1`,
         [serviceIds]
       );
 
-      /* ── VALIDATE DOCUMENTS UPLOADED ── */
       for (const service of requiredServices) {
         const [documents] = await conn.query(
           `SELECT id FROM booking_documents
            WHERE user_id = ? AND service_id = ? AND order_id IS NULL`,
           [user_id, service.id]
         );
-
         if (documents.length === 0) {
           await conn.rollback();
           return res.status(400).json({
@@ -203,11 +254,11 @@ router.post("/place", async (req, res) => {
       const [orderRes] = await conn.query(
         `INSERT INTO orders
          (order_code, user_id, location, date, slot,
-          subtotal, service_charge, total,
+          subtotal, service_charge, discount_amount, coupon_code, total,
           payment_method, payment_id,
           status, latitude, longitude,
           payment_status, category)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)`,
         [
           orderCode,
           user_id,
@@ -216,6 +267,8 @@ router.post("/place", async (req, res) => {
           slot,
           subtotal,
           serviceCharge,
+          groupDiscount,
+          appliedCoupon ? appliedCoupon.code : null,
           total,
           payment_method,
           payment_id || "",
@@ -229,13 +282,10 @@ router.post("/place", async (req, res) => {
 
       for (const item of groupItems) {
         await conn.query(
-          `INSERT INTO order_items
-           (order_id, service_id, quantity, price)
+          `INSERT INTO order_items (order_id, service_id, quantity, price)
            VALUES (?, ?, 1, ?)`,
           [orderId, item.service_id, item.price]
         );
-
-        // Attach pre-uploaded documents to this order
         await conn.query(
           `UPDATE booking_documents SET order_id = ?
            WHERE user_id = ? AND service_id = ? AND order_id IS NULL`,
@@ -243,22 +293,28 @@ router.post("/place", async (req, res) => {
         );
       }
 
-      // Build service name straight from the items in this group —
-      // no need to wait on a second DB query later, and this guarantees
-      // the field actually exists on the object passed to notification/email senders.
       const serviceNamesForOrder =
         groupItems.map((i) => i.name || i.service_name).filter(Boolean).join(", ") ||
         category;
 
       createdOrders.push({
-        order_id:      orderId,       // snake_case so Flutter reads it correctly
+        order_id:      orderId,
         order_code:    orderCode,
         category,
         subtotal,
         service_charge: serviceCharge,
+        discount:      groupDiscount,
         total,
         service_name:  serviceNamesForOrder,
       });
+    }
+
+    // Bump usage count once, for the whole checkout — not per grouped order
+    if (appliedCoupon) {
+      await conn.query(
+        `UPDATE coupons SET used_count = used_count + 1 WHERE id = ?`,
+        [appliedCoupon.id]
+      );
     }
 
     await conn.commit();
@@ -267,9 +323,10 @@ router.post("/place", async (req, res) => {
       success: true,
       message: "Order placed successfully",
       orders: createdOrders,
+      discount_applied: totalDiscount,
+      coupon_code: appliedCoupon?.code || null,
     });
 
-    // Background: send confirmation emails
     setImmediate(async () => {
       try {
         const [[user]] = await db.query(
@@ -278,26 +335,14 @@ router.post("/place", async (req, res) => {
         );
         const dateStr = fmtDate(date);
         for (const ord of createdOrders) {
-          // service_name is already populated on ord — no extra query needed,
-          // and this avoids relying on getServiceName() which can return
-          // nothing if order_items insert + this query race in any edge case.
           const serviceName = ord.service_name || (await getServiceName(ord.order_id));
           await sendBookingConfirmedToUser({
-            user,
-            order: ord,
-            bookingId: ord.order_code,   // explicit, in case the template reads bookingId
-            serviceName,
-            dateStr,
-            slot,
-            payment_method,
+            user, order: ord, bookingId: ord.order_code,
+            serviceName, dateStr, slot, payment_method,
           });
           await sendBookingAlertToCaretakers({
-            order: ord,
-            bookingId: ord.order_code,
-            serviceName,
-            dateStr,
-            slot,
-            location,
+            order: ord, bookingId: ord.order_code,
+            serviceName, dateStr, slot, location,
           });
         }
       } catch (err) {
@@ -314,7 +359,6 @@ router.post("/place", async (req, res) => {
     if (conn) conn.release();
   }
 });
-
 /* =====================================================
    POST /orders/:orderId/cancel
 ===================================================== */

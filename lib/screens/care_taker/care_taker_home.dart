@@ -15,6 +15,7 @@ class CareTakerHome extends StatefulWidget {
   final int userId;
   final String category;
   const CareTakerHome({super.key, required this.userId, required this.category});
+
   @override
   State<CareTakerHome> createState() => _CareTakerHomeState();
 }
@@ -26,23 +27,18 @@ class _CareTakerHomeState extends State<CareTakerHome>
   late String caretakerCategory;
   Timer? timer;
 
-  // ── State ──────────────────────────────────────────────────────────────────
   Map<String, dynamic> earnings = {"total": 0, "pending": 0, "paid": 0};
   String profileImage = "";
   bool loadingProfile = true;
   double avgRating = 0.0;
   int totalReviews = 0;
 
-  // ── Availability ───────────────────────────────────────────────────────────
-  bool isAvailable        = false;
-  bool availabilityLocked = false; // ← NEW: set by admin, blocks self-toggle
+  bool isAvailable = false;
+  bool availabilityLocked = false;
   bool togglingAvailability = false;
 
-  // ── Pulse animation for availability indicator ─────────────────────────────
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
-
-  // ─────────────────────────────── INIT ──────────────────────────────────────
 
   @override
   void initState() {
@@ -87,8 +83,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
   Future<void> loadEarnings() async {
     try {
       final res = await http.get(
-        Uri.parse(
-            "${Api.baseUrl}/earnings/${widget.userId}?t=${DateTime.now().millisecondsSinceEpoch}"),
+        Uri.parse("${Api.baseUrl}/earnings/${widget.userId}?t=${DateTime.now().millisecondsSinceEpoch}"),
         headers: _noCache,
       );
       if (res.statusCode == 200) {
@@ -109,8 +104,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
   Future<void> loadRating() async {
     try {
       final res = await http.get(
-        Uri.parse(
-            "${Api.caregiverRating(widget.userId)}&t=${DateTime.now().millisecondsSinceEpoch}"),
+        Uri.parse("${Api.caregiverRating(widget.userId)}&t=${DateTime.now().millisecondsSinceEpoch}"),
         headers: _noCache,
       );
       final data = jsonDecode(res.body);
@@ -125,16 +119,15 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
   Future<void> loadProfile() async {
     try {
-      final res = await http
-          .get(Uri.parse("${Api.caretakerProfile}/${widget.userId}"));
+      final res = await http.get(Uri.parse("${Api.caretakerProfile}/${widget.userId}"));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (mounted) {
           setState(() {
-            profileImage        = data["profile_image"] ?? "";
-            loadingProfile      = false;
-            isAvailable         = (data["is_available"]        == 1 || data["is_available"]        == true);
-            availabilityLocked  = (data["availability_locked"] == 1 || data["availability_locked"] == true);
+            profileImage       = data["profile_image"] ?? "";
+            loadingProfile     = false;
+            isAvailable        = (data["is_available"]        == 1 || data["is_available"]        == true);
+            availabilityLocked = (data["availability_locked"] == 1 || data["availability_locked"] == true);
           });
         }
       } else {
@@ -147,8 +140,8 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
   Future<void> loadAddress() async {
     try {
-      final res = await http.get(Uri.parse(
-          "${Api.baseUrl}/caretaker/location/default/${widget.userId}"));
+      final res = await http.get(
+          Uri.parse("${Api.baseUrl}/caretaker/location/default/${widget.userId}"));
       final data = jsonDecode(res.body);
       if (data["success"] == true && data["address"] != null) {
         final addr = data["address"];
@@ -160,14 +153,14 @@ class _CareTakerHomeState extends State<CareTakerHome>
     } catch (_) {}
   }
 
-  // ── Toggle availability ────────────────────────────────────────────────────
-  // If admin has locked this caregiver, show a dialog instead of toggling.
+  // ─────────────────────────────── TOGGLE ────────────────────────────────────
+
   Future<void> toggleAvailability() async {
-    // ── GUARD: admin lock ──────────────────────────────────────────────────
     if (availabilityLocked) {
-  _showLockedDialog();
-  return;
-}
+      _showLockedSnackbar();
+      _showLockedDialog();
+      return;
+    }
 
     if (togglingAvailability) return;
     setState(() => togglingAvailability = true);
@@ -187,23 +180,24 @@ class _CareTakerHomeState extends State<CareTakerHome>
           setState(() => isAvailable = newVal == 1);
           _showAvailabilitySnackbar(newVal == 1);
         }
-      } else {
-        // Backend may also return 403/locked — re-fetch to sync state
+      } else if (res.statusCode == 403) {
         await loadProfile();
-        if (availabilityLocked) {
+        if (mounted) {
+          _showLockedSnackbar();
           _showLockedDialog();
-         } else {
-           _showErrorSnackbar();
-         }
+        }
+      } else {
+        if (mounted) _showErrorSnackbar();
       }
     } catch (_) {
-      _showErrorSnackbar();
+      if (mounted) _showErrorSnackbar();
     } finally {
       if (mounted) setState(() => togglingAvailability = false);
     }
   }
 
-  // ── Admin-lock dialog ──────────────────────────────────────────────────────
+  // ─────────────────────────────── DIALOGS ───────────────────────────────────
+
   void _showLockedDialog() {
     showDialog(
       context: context,
@@ -214,86 +208,71 @@ class _CareTakerHomeState extends State<CareTakerHome>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Icon
               Container(
-                width: 72,
-                height: 72,
+                width: 80,
+                height: 80,
                 decoration: BoxDecoration(
                   color: Colors.orange.shade50,
                   shape: BoxShape.circle,
+                  border: Border.all(color: Colors.orange.shade200, width: 2),
                 ),
-                child: Icon(Icons.lock_rounded,
-                    color: Colors.orange.shade700, size: 36),
+                child: Icon(Icons.lock_rounded, color: Colors.orange.shade700, size: 38),
               ),
               const SizedBox(height: 20),
-
-              // Title
               const Text(
                 "Account Locked",
                 style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 19,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF1A1A2E)),
               ),
               const SizedBox(height: 12),
-
-              // Body
               Text(
-                "Your availability has been locked by the admin.\n\n"
-                "You cannot go online on your own. Please contact the Medico admin team to reactivate your account.",
+                "Your availability has been locked by the admin.\n\nYou cannot go online on your own. Please contact the Medico admin team to reactivate your account.",
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 13.5,
-                    color: Colors.grey.shade700,
-                    height: 1.55),
+                style: TextStyle(fontSize: 13.5, color: Colors.grey.shade700, height: 1.6),
               ),
-              const SizedBox(height: 8),
-
-              // Info pill
+              const SizedBox(height: 16),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: BoxDecoration(
                   color: Colors.orange.shade50,
                   borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: Colors.orange.shade200),
+                  border: Border.all(color: Colors.orange.shade300),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.support_agent_rounded,
-                        size: 15, color: Colors.orange.shade700),
-                    const SizedBox(width: 6),
+                    Icon(Icons.support_agent_rounded, size: 16, color: Colors.orange.shade700),
+                    const SizedBox(width: 8),
                     Text(
                       "Contact Admin to reactivate",
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 12.5,
                           color: Colors.orange.shade800,
-                          fontWeight: FontWeight.w600),
+                          fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
               ),
-
               const SizedBox(height: 24),
-
-              // OK button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.orange.shade700,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     elevation: 0,
                   ),
                   onPressed: () => Navigator.pop(context),
-                  child: const Text("Understood",
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14)),
+                  child: const Text(
+                    "Understood",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15),
+                  ),
                 ),
               ),
             ],
@@ -303,17 +282,61 @@ class _CareTakerHomeState extends State<CareTakerHome>
     );
   }
 
-  // ── Snackbars ──────────────────────────────────────────────────────────────
-  void _showAvailabilitySnackbar(bool available) {
+  // ─────────────────────────────── SNACKBARS ─────────────────────────────────
+
+  void _showLockedSnackbar() {
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: available
-            ? const Color(0xFF00C853)
-            : const Color(0xFFD32F2F),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: Colors.orange.shade800,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
+        content: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.lock_rounded, color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "Account Locked by Admin",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13.5),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  "Contact Medico admin to reactivate.",
+                  style: TextStyle(color: Colors.white70, fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  void _showAvailabilitySnackbar(bool available) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: available ? const Color(0xFF00C853) : const Color(0xFFD32F2F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
         content: Row(children: [
           Icon(
             available ? Icons.check_circle_rounded : Icons.cancel_rounded,
@@ -321,31 +344,31 @@ class _CareTakerHomeState extends State<CareTakerHome>
           ),
           const SizedBox(width: 10),
           Text(
-            available
-                ? "You are now Available for jobs!"
-                : "You are now Unavailable.",
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w600),
+            available ? "You are now Available for jobs!" : "You are now Unavailable.",
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
           ),
         ]),
-        duration: const Duration(seconds: 2),
       ),
     );
   }
 
   void _showErrorSnackbar() {
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
         backgroundColor: Colors.red.shade700,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         margin: const EdgeInsets.all(16),
-        content: const Text("Failed to update availability. Try again.",
-            style: TextStyle(color: Colors.white)),
+        content: const Text(
+          "Failed to update availability. Try again.",
+          style: TextStyle(color: Colors.white),
+        ),
       ),
     );
   }
+
+  // ─────────────────────────────── HELPERS ───────────────────────────────────
 
   String getImageUrl() => profileImage.startsWith("http")
       ? profileImage
@@ -358,8 +381,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
       padding: const EdgeInsets.fromLTRB(16, 50, 16, 20),
       decoration: BoxDecoration(
         gradient: AppColors.gradient,
-        borderRadius:
-            const BorderRadius.vertical(bottom: Radius.circular(25)),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -369,14 +391,11 @@ class _CareTakerHomeState extends State<CareTakerHome>
             children: [
               Text(title,
                   style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold)),
+                      color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
               GestureDetector(
                 onTap: () => Navigator.of(context)
                     .push(MaterialPageRoute(
-                        builder: (_) =>
-                            CareTakerProfileScreen(userId: widget.userId)))
+                        builder: (_) => CareTakerProfileScreen(userId: widget.userId)))
                     .then((_) => loadProfile()),
                 child: loadingProfile
                     ? const CircleAvatar(
@@ -393,12 +412,9 @@ class _CareTakerHomeState extends State<CareTakerHome>
                                   width: 52,
                                   height: 52,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => const Icon(
-                                      Icons.person,
-                                      size: 28,
-                                      color: Colors.black))
-                              : const Icon(Icons.person,
-                                  size: 28, color: Colors.black),
+                                  errorBuilder: (_, __, ___) =>
+                                      const Icon(Icons.person, size: 28, color: Colors.black))
+                              : const Icon(Icons.person, size: 28, color: Colors.black),
                         ),
                       ),
               ),
@@ -424,17 +440,14 @@ class _CareTakerHomeState extends State<CareTakerHome>
   // ─────────────────────── AVAILABILITY CARD ─────────────────────────────────
 
   Widget _buildAvailabilityCard() {
-    // When locked + offline → special locked style
     final bool isLocked = availabilityLocked;
 
     final Color activeColor   = const Color(0xFF00C853);
     final Color inactiveColor = const Color(0xFFD32F2F);
     final Color lockedColor   = Colors.orange.shade700;
 
-    final Color currentColor = isLocked
-        ? lockedColor
-        : (isAvailable ? activeColor : inactiveColor);
-    final Color currentBg = isLocked
+    final Color currentColor = isLocked ? lockedColor : (isAvailable ? activeColor : inactiveColor);
+    final Color currentBg    = isLocked
         ? Colors.orange.shade50
         : (isAvailable ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE));
 
@@ -445,21 +458,16 @@ class _CareTakerHomeState extends State<CareTakerHome>
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: currentColor.withOpacity(0.35), width: 1.5),
         boxShadow: [
-          BoxShadow(
-            color: currentColor.withOpacity(0.18),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
+          BoxShadow(color: currentColor.withOpacity(0.18), blurRadius: 16, offset: const Offset(0, 6)),
         ],
       ),
       child: Column(
         children: [
-          // ── Main row ──────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
             child: Row(
               children: [
-                // ── Pulse dot + icon ────────────────────────────────────────
+                // ── Pulse dot + icon ─────────────────────────────────────────
                 Stack(
                   alignment: Alignment.center,
                   children: [
@@ -482,19 +490,13 @@ class _CareTakerHomeState extends State<CareTakerHome>
                         color: currentColor,
                         shape: BoxShape.circle,
                         boxShadow: [
-                          BoxShadow(
-                            color: currentColor.withOpacity(0.4),
-                            blurRadius: 10,
-                            offset: const Offset(0, 3),
-                          ),
+                          BoxShadow(color: currentColor.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 3)),
                         ],
                       ),
                       child: Icon(
                         isLocked
                             ? Icons.lock_rounded
-                            : (isAvailable
-                                ? Icons.wifi_tethering_rounded
-                                : Icons.wifi_tethering_off_rounded),
+                            : (isAvailable ? Icons.wifi_tethering_rounded : Icons.wifi_tethering_off_rounded),
                         color: Colors.white,
                         size: 22,
                       ),
@@ -504,7 +506,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
                 const SizedBox(width: 16),
 
-                // ── Status text ─────────────────────────────────────────────
+                // ── Status text ───────────────────────────────────────────────
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -514,11 +516,10 @@ class _CareTakerHomeState extends State<CareTakerHome>
                             ? "Account Locked"
                             : (isAvailable ? "You're Online" : "You're Offline"),
                         style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: currentColor,
-                          letterSpacing: 0.2,
-                        ),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: currentColor,
+                            letterSpacing: 0.2),
                       ),
                       const SizedBox(height: 3),
                       Text(
@@ -528,10 +529,9 @@ class _CareTakerHomeState extends State<CareTakerHome>
                                 ? "Visible to CareSeekers · Accepting Services"
                                 : "Hidden from CareSeekers · Not accepting Services"),
                         style: TextStyle(
-                          fontSize: 11.5,
-                          color: currentColor.withOpacity(0.75),
-                          fontWeight: FontWeight.w500,
-                        ),
+                            fontSize: 11.5,
+                            color: currentColor.withOpacity(0.75),
+                            fontWeight: FontWeight.w500),
                       ),
                     ],
                   ),
@@ -539,7 +539,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
                 const SizedBox(width: 12),
 
-                // ── Toggle switch OR lock icon ───────────────────────────────
+                // ── Toggle / lock button ──────────────────────────────────────
                 togglingAvailability
                     ? SizedBox(
                         width: 44,
@@ -548,17 +548,16 @@ class _CareTakerHomeState extends State<CareTakerHome>
                           child: SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: currentColor,
-                            ),
+                            child: CircularProgressIndicator(strokeWidth: 2.5, color: currentColor),
                           ),
                         ),
                       )
                     : isLocked
-                        // ── Locked: tap to show info dialog ─────────────────
                         ? GestureDetector(
-                            onTap: _showLockedDialog,
+                            onTap: () {
+                              _showLockedSnackbar();
+                              _showLockedDialog();
+                            },
                             child: Container(
                               width: 54,
                               height: 30,
@@ -567,13 +566,10 @@ class _CareTakerHomeState extends State<CareTakerHome>
                                 color: Colors.orange.shade200,
                               ),
                               child: Center(
-                                child: Icon(Icons.lock_rounded,
-                                    size: 16,
-                                    color: Colors.orange.shade800),
+                                child: Icon(Icons.lock_rounded, size: 16, color: Colors.orange.shade800),
                               ),
                             ),
                           )
-                        // ── Normal toggle ────────────────────────────────────
                         : GestureDetector(
                             onTap: toggleAvailability,
                             child: AnimatedContainer(
@@ -583,14 +579,10 @@ class _CareTakerHomeState extends State<CareTakerHome>
                               height: 30,
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(15),
-                                color: isAvailable
-                                    ? activeColor
-                                    : Colors.grey.shade300,
+                                color: isAvailable ? activeColor : Colors.grey.shade300,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: isAvailable
-                                        ? activeColor.withOpacity(0.35)
-                                        : Colors.black12,
+                                    color: isAvailable ? activeColor.withOpacity(0.35) : Colors.black12,
                                     blurRadius: 6,
                                     offset: const Offset(0, 2),
                                   ),
@@ -599,9 +591,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                               child: AnimatedAlign(
                                 duration: const Duration(milliseconds: 280),
                                 curve: Curves.easeInOut,
-                                alignment: isAvailable
-                                    ? Alignment.centerRight
-                                    : Alignment.centerLeft,
+                                alignment: isAvailable ? Alignment.centerRight : Alignment.centerLeft,
                                 child: Container(
                                   margin: const EdgeInsets.all(3),
                                   width: 24,
@@ -610,11 +600,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                                     color: Colors.white,
                                     shape: BoxShape.circle,
                                     boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black26,
-                                        blurRadius: 4,
-                                        offset: Offset(0, 1),
-                                      ),
+                                      BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1)),
                                     ],
                                   ),
                                 ),
@@ -625,38 +611,36 @@ class _CareTakerHomeState extends State<CareTakerHome>
             ),
           ),
 
-          // ── Locked banner (shown below main row when locked) ───────────────
+          // ── Locked banner ─────────────────────────────────────────────────
           if (isLocked)
-            Container(
-              width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade100,
-                borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(20)),
-                border: Border(
-                    top: BorderSide(color: Colors.orange.shade200)),
-              ),
-              child: Row(children: [
-                Icon(Icons.support_agent_rounded,
-                    size: 16, color: Colors.orange.shade800),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    "Contact Medico admin to reactivate your account.",
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.orange.shade900,
-                        fontWeight: FontWeight.w600),
+            GestureDetector(
+              onTap: () {
+                _showLockedSnackbar();
+                _showLockedDialog();
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade100,
+                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                  border: Border(top: BorderSide(color: Colors.orange.shade200)),
+                ),
+                child: Row(children: [
+                  Icon(Icons.support_agent_rounded, size: 16, color: Colors.orange.shade800),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "Contact Medico admin to reactivate your account.",
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
+                          fontWeight: FontWeight.w600),
+                    ),
                   ),
-                ),
-                GestureDetector(
-                  onTap: _showLockedDialog,
-                  child: Icon(Icons.info_outline_rounded,
-                      size: 18, color: Colors.orange.shade700),
-                ),
-              ]),
+                  Icon(Icons.chevron_right_rounded, size: 18, color: Colors.orange.shade700),
+                ]),
+              ),
             ),
         ],
       ),
@@ -673,59 +657,46 @@ class _CareTakerHomeState extends State<CareTakerHome>
           child: RefreshIndicator(
             color: AppColors.primary,
             onRefresh: () async {
-              await Future.wait(
-                  [loadEarnings(), loadRating(), loadProfile()]);
+              await Future.wait([loadEarnings(), loadRating(), loadProfile()]);
             },
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-
-                  // ── AVAILABILITY STATUS CARD ─────────────────────────────
                   _buildAvailabilityCard(),
 
-                  // ── Welcome card ─────────────────────────────────────────
                   Container(
                     padding: const EdgeInsets.all(18),
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                          colors: [Colors.white, Colors.green.shade50]),
+                      gradient: LinearGradient(colors: [Colors.white, Colors.green.shade50]),
                       borderRadius: BorderRadius.circular(18),
                       boxShadow: [
-                        BoxShadow(
-                            blurRadius: 8,
-                            color: Colors.black.withOpacity(0.08))
+                        BoxShadow(blurRadius: 8, color: Colors.black.withOpacity(0.08))
                       ],
                     ),
                     child: Row(children: [
                       CircleAvatar(
                         radius: 28,
-                        backgroundColor:
-                            AppColors.primary.withOpacity(0.15),
+                        backgroundColor: AppColors.primary.withOpacity(0.15),
                         child: Icon(Icons.person, color: AppColors.primary),
                       ),
                       const SizedBox(width: 15),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text("Welcome",
-                              style: TextStyle(color: Colors.grey)),
+                          const Text("Welcome", style: TextStyle(color: Colors.grey)),
                           const SizedBox(height: 4),
                           Text(caretakerCategory,
-                              style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold)),
+                              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 6),
                           Row(children: [
-                            const Icon(Icons.star,
-                                color: Colors.amber, size: 18),
+                            const Icon(Icons.star, color: Colors.amber, size: 18),
                             const SizedBox(width: 4),
                             Text(avgRating.toStringAsFixed(1)),
                             const SizedBox(width: 6),
                             Text("($totalReviews reviews)",
-                                style:
-                                    const TextStyle(color: Colors.grey)),
+                                style: const TextStyle(color: Colors.grey)),
                           ]),
                         ],
                       ),
@@ -734,54 +705,40 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
                   const SizedBox(height: 20),
 
-                  // ── Earnings cards ────────────────────────────────────────
                   Row(children: [
                     Expanded(
-                      child: _statCard("Total", "₹${earnings["total"]}",
-                          Colors.green, Icons.trending_up),
+                      child: _statCard("Total", "₹${earnings["total"]}", Colors.green, Icons.trending_up),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: _statCard(
-                          "Pending",
-                          "₹${earnings["pending"]}",
-                          Colors.orange,
-                          Icons.warning_amber_rounded),
+                      child: _statCard("Pending", "₹${earnings["pending"]}", Colors.orange, Icons.warning_amber_rounded),
                     ),
                   ]),
 
                   const SizedBox(height: 15),
 
-                  // ── View full earnings ────────────────────────────────────
                   GestureDetector(
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => CaretakerEarningsScreen(
-                            caretakerId: widget.userId),
+                        builder: (_) => CaretakerEarningsScreen(caretakerId: widget.userId),
                       ),
                     ),
                     child: Container(
                       padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(colors: [
-                          Color(0xFF0F9D58),
-                          Color(0xFF34A853)
-                        ]),
+                        gradient: const LinearGradient(
+                            colors: [Color(0xFF0F9D58), Color(0xFF34A853)]),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: const Row(children: [
-                        Icon(Icons.account_balance_wallet,
-                            color: Colors.white),
+                        Icon(Icons.account_balance_wallet, color: Colors.white),
                         SizedBox(width: 12),
                         Expanded(
                           child: Text("View Full Earnings",
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold)),
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                         ),
-                        Icon(Icons.arrow_forward_ios,
-                            color: Colors.white, size: 16),
+                        Icon(Icons.arrow_forward_ios, color: Colors.white, size: 16),
                       ]),
                     ),
                   ),
@@ -805,15 +762,13 @@ class _CareTakerHomeState extends State<CareTakerHome>
     );
   }
 
-  // ─────────────────────────────── HELPERS ───────────────────────────────────
+  // ─────────────────────────────── WIDGETS ───────────────────────────────────
 
-  Widget _statCard(
-          String title, String value, Color color, IconData icon) =>
+  Widget _statCard(String title, String value, Color color, IconData icon) =>
       Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          gradient:
-              LinearGradient(colors: [color, color.withOpacity(0.7)]),
+          gradient: LinearGradient(colors: [color, color.withOpacity(0.7)]),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(children: [
@@ -821,9 +776,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
           const SizedBox(height: 8),
           Text(value,
               style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold)),
+                  color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
           Text(title, style: const TextStyle(color: Colors.white70)),
         ]),
@@ -832,8 +785,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
   Widget _sectionTitle(String text) => Align(
         alignment: Alignment.centerLeft,
         child: Text(text,
-            style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.bold)),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
       );
 
   Widget _actionCard(IconData icon, String text, VoidCallback onTap) =>
@@ -846,9 +798,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
-              BoxShadow(
-                  blurRadius: 5,
-                  color: Colors.black.withOpacity(0.05))
+              BoxShadow(blurRadius: 5, color: Colors.black.withOpacity(0.05))
             ],
           ),
           child: Row(children: [
@@ -870,8 +820,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
         return Column(children: [
           appHeader(title: "Services"),
           Expanded(
-            child: AvailableOrdersScreen(
-                userId: widget.userId, category: caretakerCategory),
+            child: AvailableOrdersScreen(userId: widget.userId, category: caretakerCategory),
           ),
         ]);
       case 2:
@@ -882,8 +831,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
       case 3:
         return Column(children: [
           appHeader(title: "Settings"),
-          Expanded(
-              child: CareTakerSettingsScreen(userId: widget.userId)),
+          Expanded(child: CareTakerSettingsScreen(userId: widget.userId)),
         ]);
       default:
         return homeScreen();
@@ -926,20 +874,16 @@ class _CareTakerHomeState extends State<CareTakerHome>
             onTap: (i) => setState(() => currentIndex = i),
             items: [
               BottomNavigationBarItem(
-                  icon: Icon(Icons.home,
-                      size: currentIndex == 0 ? 28 : 24),
+                  icon: Icon(Icons.home, size: currentIndex == 0 ? 28 : 24),
                   label: "Home"),
               BottomNavigationBarItem(
-                  icon: Icon(Icons.work,
-                      size: currentIndex == 1 ? 28 : 24),
+                  icon: Icon(Icons.work, size: currentIndex == 1 ? 28 : 24),
                   label: "Services"),
               BottomNavigationBarItem(
-                  icon: Icon(Icons.assignment,
-                      size: currentIndex == 2 ? 28 : 24),
+                  icon: Icon(Icons.assignment, size: currentIndex == 2 ? 28 : 24),
                   label: "Accepted"),
               BottomNavigationBarItem(
-                  icon: Icon(Icons.settings,
-                      size: currentIndex == 3 ? 28 : 24),
+                  icon: Icon(Icons.settings, size: currentIndex == 3 ? 28 : 24),
                   label: "Settings"),
             ],
           ),
