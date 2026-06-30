@@ -59,7 +59,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   num  get _total         => num.tryParse(_order["total"]?.toString()           ?? "0") ?? 0;
   bool get _hasCharge     => _serviceCharge > 0;
 
-  String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? _order["category"] ?? "Service").toString();
+String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? _order["category"] ?? "Service").toString();
+
+  num    get _discount    => num.tryParse(_order["discount_amount"]?.toString() ?? "0") ?? 0;
+  bool   get _hasDiscount => _discount > 0;
+  String get _couponCode  => (_order["coupon_code"] ?? "").toString();
 
   // ── Privacy guard: hide carer details once service is completed ───────────────
   bool   get _hasCarer   =>
@@ -1063,6 +1067,38 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                           fontWeight: FontWeight.w700)),
                 ),
               ]),
+            ]),
+          ),
+        ]),
+        _div(),
+      ],
+
+      if (_hasDiscount) ...[
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _totalGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.local_offer_rounded,
+                color: _totalGreen, size: 18),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                  _couponCode.isNotEmpty
+                      ? "Coupon ($_couponCode)"
+                      : "Discount",
+                  style: TextStyle(
+                      color: AppColors.muted, fontSize: 12,
+                      fontWeight: FontWeight.w500)),
+              const SizedBox(height: 3),
+              Text("−₹$_discount",
+                  style: TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w700,
+                      color: _totalGreen)),
             ]),
           ),
         ]),

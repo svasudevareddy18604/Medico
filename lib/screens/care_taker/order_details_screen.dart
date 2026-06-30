@@ -1133,52 +1133,60 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                 color: AppColors.primary),
                           ),
                         )
-                      : GestureDetector(
-                          onTap: _ctaAction,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            width: double.infinity,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              color: _ctaAction == null
-                                  ? Colors.grey.shade300
-                                  : _ctaColor,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: _ctaAction == null
-                                  ? []
-                                  : [
-                                      BoxShadow(
-                                          color: _ctaColor.withOpacity(0.35),
-                                          blurRadius: 14,
-                                          offset: const Offset(0, 6))
-                                    ],
-                            ),
-                            child: Center(
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    _ctaIcon,
-                                    color: _ctaAction == null
-                                        ? Colors.grey
-                                        : Colors.white,
-                                    size: 20,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    _ctaLabel,
-                                    style: TextStyle(
+                      : (_isAccepted || _isConfirmed)
+                          // Swipe-to-confirm slider, only for "Start Journey"
+                          ? _SwipeToStartButton(
+                              color: _blue,
+                              enabled: _ctaAction != null,
+                              onConfirmed: () => _ctaAction?.call(),
+                            )
+                          // All other CTA states keep the tap button
+                          : GestureDetector(
+                              onTap: _ctaAction,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                width: double.infinity,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: _ctaAction == null
+                                      ? Colors.grey.shade300
+                                      : _ctaColor,
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: _ctaAction == null
+                                      ? []
+                                      : [
+                                          BoxShadow(
+                                              color: _ctaColor.withOpacity(0.35),
+                                              blurRadius: 14,
+                                              offset: const Offset(0, 6))
+                                        ],
+                                ),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _ctaIcon,
                                         color: _ctaAction == null
                                             ? Colors.grey
                                             : Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 15),
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        _ctaLabel,
+                                        style: TextStyle(
+                                            color: _ctaAction == null
+                                                ? Colors.grey
+                                                : Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 15),
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                ),
                               ),
                             ),
-                          ),
-                        ),
                 ]),
               ),
             ),
@@ -1199,7 +1207,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       ),
     );
   }
-
   // ── Location Restricted Box (themed) ───────────────────────────
   Widget _locationRestrictedBox({
     required String label,
@@ -1632,6 +1639,274 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
           ),
         ),
       );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Add this class anywhere below your OrderDetailsScreen file
+// (e.g. right above the `enum _ToastType` line).
+// ════════════════════════════════════════════════════════════════
+
+class _SwipeToStartButton extends StatefulWidget {
+  final VoidCallback onConfirmed;
+  final Color color;
+  final String label;
+  final String confirmedLabel;
+  final IconData icon;
+  final bool enabled;
+
+  const _SwipeToStartButton({
+    required this.onConfirmed,
+    required this.color,
+    this.label = "Swipe to Start Journey",
+    this.confirmedLabel = "Journey Started",
+    this.icon = Icons.directions_run_rounded,
+    this.enabled = true,
+  });
+
+  @override
+  State<_SwipeToStartButton> createState() => _SwipeToStartButtonState();
+}
+
+class _SwipeToStartButtonState extends State<_SwipeToStartButton>
+    with TickerProviderStateMixin {
+  static const double _trackHeight = 60;
+  static const double _knobSize = 52;
+  static const double _padding = 4;
+
+  double _dragX = 0;
+  bool _confirmed = false;
+  bool _dragging = false;
+
+  late AnimationController _shimmerCtrl;
+  late AnimationController _snapCtrl;
+  late Animation<double> _snapAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmerCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat();
+
+    _snapCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+    );
+  }
+
+  @override
+  void dispose() {
+    _shimmerCtrl.dispose();
+    _snapCtrl.dispose();
+    super.dispose();
+  }
+
+  double _maxDrag(double trackWidth) =>
+      trackWidth - _knobSize - _padding * 2;
+
+  void _onDragUpdate(DragUpdateDetails details, double trackWidth) {
+    if (!widget.enabled || _confirmed) return;
+    final maxDrag = _maxDrag(trackWidth);
+    setState(() {
+      _dragX = (_dragX + details.delta.dx).clamp(0.0, maxDrag);
+    });
+  }
+
+  void _onDragStart() {
+    if (!widget.enabled || _confirmed) return;
+    setState(() => _dragging = true);
+    HapticFeedback.lightImpact();
+  }
+
+  void _onDragEnd(double trackWidth) {
+    if (!widget.enabled || _confirmed) return;
+    final maxDrag = _maxDrag(trackWidth);
+    setState(() => _dragging = false);
+
+    // Threshold: 78% of the way across counts as a confirm
+    if (_dragX >= maxDrag * 0.78) {
+      _confirm(maxDrag);
+    } else {
+      _snapBack();
+    }
+  }
+
+  void _confirm(double maxDrag) {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _confirmed = true;
+      _dragX = maxDrag;
+    });
+    Future.delayed(const Duration(milliseconds: 180), () {
+      widget.onConfirmed();
+    });
+  }
+
+  void _snapBack() {
+    _snapAnim = Tween<double>(begin: _dragX, end: 0).animate(
+      CurvedAnimation(parent: _snapCtrl, curve: Curves.easeOutCubic),
+    )..addListener(() {
+        setState(() => _dragX = _snapAnim.value);
+      });
+    _snapCtrl.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = !widget.enabled;
+    final baseColor = disabled ? Colors.grey.shade300 : widget.color;
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final trackWidth = constraints.maxWidth;
+      final maxDrag = _maxDrag(trackWidth);
+      final progress = maxDrag <= 0 ? 0.0 : (_dragX / maxDrag).clamp(0.0, 1.0);
+
+      return GestureDetector(
+        onHorizontalDragStart: (_) => _onDragStart(),
+        onHorizontalDragUpdate: (d) => _onDragUpdate(d, trackWidth),
+        onHorizontalDragEnd: (_) => _onDragEnd(trackWidth),
+        child: Container(
+          height: _trackHeight,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(_trackHeight / 2),
+            gradient: LinearGradient(
+              colors: disabled
+                  ? [Colors.grey.shade300, Colors.grey.shade300]
+                  : [
+                      baseColor.withOpacity(0.92),
+                      Color.lerp(baseColor, Colors.black, 0.18)!,
+                    ],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            boxShadow: disabled
+                ? []
+                : [
+                    BoxShadow(
+                      color: baseColor.withOpacity(0.35),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+          ),
+          child: Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              // Filled progress track behind the knob
+              AnimatedContainer(
+                duration: _dragging
+                    ? Duration.zero
+                    : const Duration(milliseconds: 200),
+                margin: EdgeInsets.only(left: _padding),
+                width: _knobSize + _dragX,
+                height: _trackHeight - _padding * 2,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(_trackHeight / 2),
+                  color: Colors.white.withOpacity(0.16),
+                ),
+              ),
+
+              // Shimmer text hint, fades out as user drags
+              Positioned.fill(
+                child: Center(
+                  child: Opacity(
+                    opacity: disabled ? 0.5 : (1 - progress * 1.4).clamp(0.0, 1.0),
+                    child: AnimatedBuilder(
+                      animation: _shimmerCtrl,
+                      builder: (_, __) => ShaderMask(
+                        shaderCallback: (rect) {
+                          final t = _shimmerCtrl.value;
+                          return LinearGradient(
+                            colors: const [
+                              Colors.white,
+                              Colors.white70,
+                              Colors.white,
+                            ],
+                            stops: [
+                              (t - 0.3).clamp(0.0, 1.0),
+                              t.clamp(0.0, 1.0),
+                              (t + 0.3).clamp(0.0, 1.0),
+                            ],
+                          ).createShader(rect);
+                        },
+                        child: Text(
+                          _confirmed ? widget.confirmedLabel : widget.label,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14.5,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // Trailing chevrons hint (subtle, fades with progress)
+              Positioned(
+                right: 18,
+                child: Opacity(
+                  opacity: disabled ? 0.0 : (1 - progress * 1.6).clamp(0.0, 1.0),
+                  child: Row(
+                    children: List.generate(
+                      3,
+                      (i) => Icon(
+                        Icons.chevron_right_rounded,
+                        color: Colors.white.withOpacity(0.55 - i * 0.15),
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // Draggable knob
+              AnimatedContainer(
+                duration: _dragging
+                    ? Duration.zero
+                    : const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                margin: EdgeInsets.only(left: _padding + _dragX),
+                width: _knobSize,
+                height: _knobSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.20),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: _confirmed
+                      ? SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.4,
+                            color: baseColor,
+                          ),
+                        )
+                      : Icon(
+                          widget.icon,
+                          color: disabled ? Colors.grey.shade400 : baseColor,
+                          size: 24,
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    });
+  }
 }
 
 // ── Enums ────────────────────────────────────────────────────────

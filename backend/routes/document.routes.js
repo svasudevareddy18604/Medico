@@ -66,6 +66,8 @@ router.get(
 
           AND order_id IS NULL
 
+          AND is_deleted = 0
+
           ORDER BY id DESC
           `,
           [
@@ -100,6 +102,162 @@ router.get(
 
         message:
           "Failed to fetch pending documents",
+      });
+    }
+  }
+);
+
+/* =========================================
+   GET DOCUMENTS FOR A SPECIFIC ORDER
+   (use this from the caretaker order-details
+   screen — this is the safe, leak-proof fetch)
+========================================= */
+
+router.get(
+  "/order/:orderId",
+
+  async (req, res) => {
+
+    try {
+
+      const { orderId } = req.params;
+
+      // Confirm the order actually exists first.
+      const [orderRows] = await db.query(
+        `SELECT id, user_id, created_at FROM orders WHERE id = ?`,
+        [orderId]
+      );
+
+      if (orderRows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found",
+        });
+      }
+
+      const order = orderRows[0];
+
+      // CRITICAL SAFETY FILTER:
+      // A document can only belong to this order if:
+      //   1. its order_id matches, AND
+      //   2. it was uploaded at or after this order's created_at.
+      // This guarantees that even if order_id values get reused
+      // (e.g. AUTO_INCREMENT reset after a delete/truncate), stale
+      // orphaned documents from a previous, now-deleted order can
+      // never be shown against a new order that happens to reuse
+      // the same id.
+      const [documents] = await db.query(
+        `
+        SELECT
+          id,
+          order_id,
+          user_id,
+          service_id,
+          document_key,
+          file_url,
+          file_type,
+          uploaded_at
+        FROM booking_documents
+        WHERE order_id = ?
+          AND user_id = ?
+          AND is_deleted = 0
+          AND uploaded_at >= ?
+        ORDER BY uploaded_at ASC
+        `,
+        [orderId, order.user_id, order.created_at]
+      );
+
+      return res.status(200).json({
+        success: true,
+        total_documents: documents.length,
+        documents,
+      });
+
+    } catch (error) {
+
+      console.error(
+        "GET ORDER DOCUMENTS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch order documents",
+      });
+    }
+  }
+);
+
+/* =========================================
+   LINK PENDING DOCUMENTS TO A NEW ORDER
+   Call this right after an order is created,
+   to attach any order_id IS NULL docs that
+   were uploaded during the booking flow.
+========================================= */
+
+router.post(
+  "/link",
+
+  async (req, res) => {
+
+    try {
+
+      const { order_id, user_id, service_id } = req.body;
+
+      if (!order_id || !user_id || !service_id) {
+        return res.status(400).json({
+          success: false,
+          message: "order_id, user_id and service_id are required",
+        });
+      }
+
+      // Verify the order exists and belongs to this user before linking.
+      const [orderRows] = await db.query(
+        `SELECT id, user_id FROM orders WHERE id = ?`,
+        [order_id]
+      );
+
+      if (orderRows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found",
+        });
+      }
+
+      if (String(orderRows[0].user_id) !== String(user_id)) {
+        return res.status(403).json({
+          success: false,
+          message: "Order does not belong to this user",
+        });
+      }
+
+      const [result] = await db.query(
+        `
+        UPDATE booking_documents
+        SET order_id = ?
+        WHERE user_id = ?
+          AND service_id = ?
+          AND order_id IS NULL
+          AND is_deleted = 0
+        `,
+        [order_id, user_id, service_id]
+      );
+
+      return res.status(200).json({
+        success: true,
+        linked: result.affectedRows,
+      });
+
+    } catch (error) {
+
+      console.error(
+        "LINK DOCUMENTS ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to link documents",
       });
     }
   }
@@ -198,6 +356,34 @@ router.post(
       }
 
       /* =========================================
+         VALIDATE order_id IF PROVIDED
+         Prevents stale/reused/foreign order ids
+         from ever being attached to a document.
+      ========================================= */
+
+      if (order_id) {
+
+        const [orderRows] = await db.query(
+          `SELECT id, user_id FROM orders WHERE id = ?`,
+          [order_id]
+        );
+
+        if (orderRows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: "order_id does not correspond to a real order",
+          });
+        }
+
+        if (String(orderRows[0].user_id) !== String(user_id)) {
+          return res.status(403).json({
+            success: false,
+            message: "order_id does not belong to this user",
+          });
+        }
+      }
+
+      /* =========================================
          CHECK EXISTING DOCS
       ========================================= */
 
@@ -213,6 +399,8 @@ router.post(
           AND service_id = ?
 
           AND order_id IS NULL
+
+          AND is_deleted = 0
           `,
           [
             user_id,

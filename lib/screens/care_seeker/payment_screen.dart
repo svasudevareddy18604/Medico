@@ -152,72 +152,72 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   // ── PLACE ORDER ───────────────────────────────────────────────────────────
   Future<Map<String, dynamic>?> _placeOrder({
-    required String method,
-    String paymentId = "",
-  }) async {
-    _log("placeOrder → method:$method paymentId:$paymentId");
-    try {
-      final body = jsonEncode({
-        "user_id": widget.userId,
-        "location": widget.location,
-        "date": widget.date,
-        "slot": _to24Hour(widget.slot),
-        "total": widget.total,
-        "subtotal": widget.subtotal,
-        "service_charge": widget.serviceCharge,
-        "discount": widget.discount,
-        "payment_method": method,
-        "payment_id": paymentId,
-        "latitude": widget.latitude,
-        "longitude": widget.longitude,
-        "items": widget.cartItems
-            .map((e) => {
-                  "service_id": e["service_id"] ?? e["id"],
-                  "quantity": e["quantity"] ?? 1,
-                  "price": e["price"] ?? 0,
-                  "category": (e["category"] ?? "").toString().trim(),
-                })
-            .toList(),
-      });
+  required String method,
+  String paymentId = "",
+}) async {
+  _log("placeOrder → method:$method paymentId:$paymentId");
+  try {
+    final body = jsonEncode({
+      "user_id": widget.userId,
+      "location": widget.location,
+      "date": widget.date,
+      "slot": _to24Hour(widget.slot),
+      "total": widget.total,
+      "subtotal": widget.subtotal,
+      "service_charge": widget.serviceCharge,
+      "discount": widget.discount,
+      "coupon_code": widget.couponCode,
+      "payment_method": method,
+      "payment_id": paymentId,
+      "latitude": widget.latitude,
+      "longitude": widget.longitude,
+      "items": widget.cartItems
+          .map((e) => {
+                "service_id": e["service_id"] ?? e["id"],
+                "quantity": e["quantity"] ?? 1,
+                "price": e["price"] ?? 0,
+                "category": (e["category"] ?? "").toString().trim(),
+              })
+          .toList(),
+    });
 
-      // ── FIX 1 (used here): reuse persistent _httpClient
-      final res = await _httpClient
-          .post(
-            Uri.parse(Api.placeOrder),
-            headers: {"Content-Type": "application/json"},
-            body: body,
-          )
-          .timeout(const Duration(seconds: 15));
+    // ── FIX 1 (used here): reuse persistent _httpClient
+    final res = await _httpClient
+        .post(
+          Uri.parse(Api.placeOrder),
+          headers: {"Content-Type": "application/json"},
+          body: body,
+        )
+        .timeout(const Duration(seconds: 15));
 
-      _log("placeOrder ${res.statusCode}: ${res.body}");
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      if (data["success"] != true) return null;
+    _log("placeOrder ${res.statusCode}: ${res.body}");
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (data["success"] != true) return null;
 
-      if (data["orders"] is List && (data["orders"] as List).isNotEmpty) {
-        final first = (data["orders"] as List).first as Map<String, dynamic>;
-        data["order_id"] ??= first["order_id"] ?? first["id"];
-        data["order_code"] ??= first["order_code"];
-      }
-      _log("placeOrder success — order_id:${data["order_id"]}");
-      return data;
-    } catch (e) {
-      _log("placeOrder exception: $e");
-      return null;
+    if (data["orders"] is List && (data["orders"] as List).isNotEmpty) {
+      final first = (data["orders"] as List).first as Map<String, dynamic>;
+      data["order_id"]   ??= first["order_id"] ?? first["id"];
+      data["order_code"] ??= first["order_code"];
     }
+    _log("placeOrder success — order_id:${data["order_id"]}");
+    return data;
+  } catch (e) {
+    _log("placeOrder exception: $e");
+    return null;
   }
+}
 
-  // ── CLEAR CART ────────────────────────────────────────────────────────────
-  Future<void> _clearCart() async {
-    try {
-      await _httpClient
-          .delete(Uri.parse("${Api.baseUrl}/cart/${widget.userId}/clear"))
-          .timeout(const Duration(seconds: 10));
-      _log("Cart cleared");
-    } catch (e) {
-      _log("clearCart error: $e");
-    }
+// ── CLEAR CART ────────────────────────────────────────────────────────────
+Future<void> _clearCart() async {
+  try {
+    await _httpClient
+        .delete(Uri.parse("${Api.baseUrl}/cart/${widget.userId}/clear"))
+        .timeout(const Duration(seconds: 10));
+    _log("Cart cleared");
+  } catch (e) {
+    _log("clearCart error: $e");
   }
-
+}
   // ── COD ───────────────────────────────────────────────────────────────────
   Future<void> _handleCOD() async {
     if (_processing) return;
