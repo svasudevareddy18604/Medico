@@ -411,8 +411,7 @@ GET UPLOADED DOCUMENTS
 GET /api/caretaker/documents/:user_id
 =====================================
 */
-
-router.get("/documents/:user_id", async (req, res) => {
+router.get("/:user_id", async (req, res) => {
 
   try {
 
