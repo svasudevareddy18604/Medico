@@ -228,7 +228,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
               ),
               const SizedBox(height: 12),
               Text(
-                "Your availability has been locked by the admin.\n\nYou cannot go online on your own. Please contact the Medico admin team to reactivate your account.",
+                "Your availability has been locked by the admin due to inactive of your account.\n\nYou cannot go online on your own. Please contact the Medico admin team to reactivate your account.",
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13.5, color: Colors.grey.shade700, height: 1.6),
               ),

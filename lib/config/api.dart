@@ -139,6 +139,7 @@ class Api {
 
   static String nearbyCaretakers(int userId)                       => "$baseUrl/caretakers/$userId";
   static String caretakerAvailability(int userId, String category) => "$baseUrl/caretakers/$userId/availability/$category";
+  static String caretakerPerformance(int caretakerId) => "$baseUrl/caretaker/performance/$caretakerId";
 
   /* ================= LIVE CHAT ================= */
 

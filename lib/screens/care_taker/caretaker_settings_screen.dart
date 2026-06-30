@@ -10,6 +10,7 @@ import 'payment_details_screen.dart';
 import 'live_chat_screen.dart';
 import 'ratings_reviews_screen.dart';
 import 'emergency_sos_screen.dart';
+import 'performance_analytics_screen.dart';
 
 import '../../login_page.dart';
 
@@ -614,15 +615,14 @@ class CareTakerSettingsScreen extends StatelessWidget {
             ),
 
             _tile(
-              context,
-
-              icon: Icons.insights_rounded,
-
-              title:
-                  "Performance Analytics",
-
-              onTap: () {},
-            ),
+  context,
+  icon: Icons.insights_rounded,
+  title: "Performance Analytics",
+  onTap: () => _go(
+    context,
+    PerformanceAnalyticsScreen(userId: userId),
+  ),
+),
 
             _tile(
               context,

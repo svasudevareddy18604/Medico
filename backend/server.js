@@ -48,6 +48,7 @@ const caretakerTasksRoutes = require("./routes/caretakerTasks.routes");
 const caretakerProfileRoutes = require("./routes/caretakerprofile.routes");
 const caretakerPaymentRoutes = require("./routes/caretakerpayment.routes");
 const caretakerPaymentDetailsRoutes = require("./routes/caretakerpaymentdetails.routes");
+const caretakerPerformanceRoutes = require("./routes/performance.routes");
 const earningsRoutes = require("./routes/earnings.routes");
 const withdrawalRoutes = require("./routes/withdrawal.routes");
 
@@ -220,6 +221,11 @@ app.use(
 app.use(
   "/api/caretaker/payment-details",
   caretakerPaymentDetailsRoutes
+);
+
+app.use(
+  "/api/caretaker/performance",
+  caretakerPerformanceRoutes
 );
 
 app.use("/api/earnings", earningsRoutes);
