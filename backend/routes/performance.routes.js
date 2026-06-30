@@ -1,14 +1,14 @@
-/* =========================================
-   GET /caretaker/performance/:caretakerId
-   Add this route inside your existing
-   caretaker.js router file.
-========================================= */
+const express = require("express");
+const router = express.Router();
+const db = require("../config/db"); // adjust to your actual db/pool path
 
-router.get("/performance/:caretakerId", async (req, res) => {
+/* =========================================
+   GET /api/caretaker/performance/:caretakerId
+========================================= */
+router.get("/:caretakerId", async (req, res) => {
   try {
     const { caretakerId } = req.params;
 
-    /* ── Job counts & completion rate ───────────────────────── */
     const [[jobStats]] = await db.query(`
       SELECT
         COUNT(*) AS total_jobs,
@@ -27,7 +27,6 @@ router.get("/performance/:caretakerId", async (req, res) => {
       ? Number(((completedJobs / totalJobs) * 100).toFixed(1))
       : 0;
 
-    /* ── Earnings summary ────────────────────────────────────── */
     const [[earningStats]] = await db.query(`
       SELECT
         COALESCE(SUM(caretaker_amount), 0) AS total_earnings,
@@ -37,7 +36,6 @@ router.get("/performance/:caretakerId", async (req, res) => {
       WHERE caretaker_id = ?
     `, [caretakerId]);
 
-    /* ── This month earnings & jobs ──────────────────────────── */
     const [[thisMonth]] = await db.query(`
       SELECT
         COALESCE(SUM(e.caretaker_amount), 0) AS this_month_earnings,
@@ -50,7 +48,6 @@ router.get("/performance/:caretakerId", async (req, res) => {
         AND YEAR(o.completed_at) = YEAR(CURDATE())
     `, [caretakerId]);
 
-    /* ── Ratings ─────────────────────────────────────────────── */
     const [[ratingStats]] = await db.query(`
       SELECT
         COALESCE(AVG(rating), 0) AS avg_rating,
@@ -64,7 +61,6 @@ router.get("/performance/:caretakerId", async (req, res) => {
       WHERE caregiver_id = ?
     `, [caretakerId]);
 
-    /* ── Last 6 months: jobs completed + earnings per month ─── */
     const [monthlyTrend] = await db.query(`
       SELECT
         DATE_FORMAT(o.completed_at, '%Y-%m') AS month_key,
@@ -80,7 +76,6 @@ router.get("/performance/:caretakerId", async (req, res) => {
       ORDER BY month_key ASC
     `, [caretakerId]);
 
-    /* ── Category breakdown ─────────────────────────────────── */
     const [categoryBreakdown] = await db.query(`
       SELECT category, COUNT(*) AS count
       FROM orders
@@ -128,7 +123,9 @@ router.get("/performance/:caretakerId", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("PERFORMANCE ANALYTICS ERROR:", err);
+    console.error("🔥 PERFORMANCE ANALYTICS ERROR:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+module.exports = router;
