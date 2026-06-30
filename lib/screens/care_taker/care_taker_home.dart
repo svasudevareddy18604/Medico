@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'package:medico/utils/app_colors.dart';
@@ -36,6 +37,10 @@ class _CareTakerHomeState extends State<CareTakerHome>
   bool isAvailable = false;
   bool availabilityLocked = false;
   bool togglingAvailability = false;
+
+  // approval_status from users table -> approved means verified (blue tick)
+  String approvalStatus = "pending";
+  bool get isVerified => approvalStatus == "approved";
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -128,6 +133,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
             loadingProfile     = false;
             isAvailable        = (data["is_available"]        == 1 || data["is_available"]        == true);
             availabilityLocked = (data["availability_locked"] == 1 || data["availability_locked"] == true);
+            approvalStatus     = data["approval_status"]?.toString() ?? approvalStatus;
           });
         }
       } else {
@@ -467,7 +473,6 @@ class _CareTakerHomeState extends State<CareTakerHome>
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
             child: Row(
               children: [
-                // ── Pulse dot + icon ─────────────────────────────────────────
                 Stack(
                   alignment: Alignment.center,
                   children: [
@@ -506,7 +511,6 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
                 const SizedBox(width: 16),
 
-                // ── Status text ───────────────────────────────────────────────
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -539,7 +543,6 @@ class _CareTakerHomeState extends State<CareTakerHome>
 
                 const SizedBox(width: 12),
 
-                // ── Toggle / lock button ──────────────────────────────────────
                 togglingAvailability
                     ? SizedBox(
                         width: 44,
@@ -611,7 +614,6 @@ class _CareTakerHomeState extends State<CareTakerHome>
             ),
           ),
 
-          // ── Locked banner ─────────────────────────────────────────────────
           if (isLocked)
             GestureDetector(
               onTap: () {
@@ -687,8 +689,19 @@ class _CareTakerHomeState extends State<CareTakerHome>
                         children: [
                           const Text("Welcome", style: TextStyle(color: Colors.grey)),
                           const SizedBox(height: 4),
-                          Text(caretakerCategory,
-                              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                          // ── Category + Blue Verified Tick ─────────────────
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(caretakerCategory,
+                                  style: const TextStyle(
+                                      fontSize: 20, fontWeight: FontWeight.bold)),
+                              if (isVerified) ...[
+                                const SizedBox(width: 6),
+                                const _BlueTick(size: 18),
+                              ],
+                            ],
+                          ),
                           const SizedBox(height: 6),
                           Row(children: [
                             const Icon(Icons.star, color: Colors.amber, size: 18),
@@ -891,4 +904,67 @@ class _CareTakerHomeState extends State<CareTakerHome>
       ),
     );
   }
+}
+
+/* =========================================================
+   INSTAGRAM-STYLE BLUE VERIFIED TICK BADGE
+========================================================= */
+
+class _BlueTick extends StatelessWidget {
+  final double size;
+  const _BlueTick({this.size = 18});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _BlueTickPainter(),
+      ),
+    );
+  }
+}
+
+class _BlueTickPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    final path = Path();
+    const points = 8;
+    for (int i = 0; i < points * 2; i++) {
+      final angle = (i * math.pi * 2) / (points * 2) - math.pi / 2;
+      final r = i.isEven ? radius : radius * 0.82;
+      final x = center.dx + r * math.cos(angle);
+      final y = center.dy + r * math.sin(angle);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    path.close();
+
+    final badgePaint = Paint()..color = const Color(0xFF1DA1F2);
+    canvas.drawPath(path, badgePaint);
+
+    final checkPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = size.width * 0.14
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final checkPath = Path()
+      ..moveTo(size.width * 0.28, size.height * 0.52)
+      ..lineTo(size.width * 0.44, size.height * 0.68)
+      ..lineTo(size.width * 0.74, size.height * 0.32);
+
+    canvas.drawPath(checkPath, checkPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

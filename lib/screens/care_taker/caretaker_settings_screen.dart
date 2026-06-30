@@ -11,6 +11,7 @@ import 'live_chat_screen.dart';
 import 'ratings_reviews_screen.dart';
 import 'emergency_sos_screen.dart';
 import 'performance_analytics_screen.dart';
+import 'documents_verification_screen.dart';
 
 import '../../login_page.dart';
 import 'package:medico/utils/app_colors.dart';
@@ -298,7 +299,10 @@ class CareTakerSettingsScreen extends StatelessWidget {
               context,
               icon: Icons.verified_rounded,
               title: "Documents & Verification",
-              onTap: () {},
+              onTap: () => _go(
+                context,
+                DocumentsVerificationScreen(userId: userId),
+              ),
             ),
           ],
         ),

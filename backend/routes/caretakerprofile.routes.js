@@ -53,6 +53,7 @@ router.get("/:userId", async (req, res) => {
         u.first_name,
         u.last_name,
         u.mobile,
+        u.approval_status,
 
         cp.caregiver_type,
         cp.experience,
@@ -60,7 +61,8 @@ router.get("/:userId", async (req, res) => {
         cp.services,
         cp.profile_image,
 
-        cp.is_available
+        cp.is_available,
+        cp.availability_locked
 
       FROM users u
 
@@ -107,10 +109,13 @@ router.get("/:userId", async (req, res) => {
 
       profile_image: p.profile_image || "",
 
-      // ================= NEW =================
-
       is_available:
         p.is_available === 0 ? 0 : 1,
+
+      availability_locked:
+        p.availability_locked === 1 ? 1 : 0,
+
+      approval_status: p.approval_status || "pending",
     });
 
   } catch (err) {

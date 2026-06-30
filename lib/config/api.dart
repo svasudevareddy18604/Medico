@@ -40,6 +40,7 @@ class Api {
   static const String uploadDocuments = "$baseUrl/documents/upload";
   static String orderDocuments(int orderId)                        => "$baseUrl/documents/order/$orderId";
   static String pendingDocuments(int userId, int serviceId)        => "$baseUrl/documents/pending/$userId/$serviceId";
+  static String getCaretakerDocuments(int userId) => "$baseUrl/caretaker/documents/$userId";
 
   /* ================= SERVICES ================= */
 
