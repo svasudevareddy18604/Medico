@@ -194,7 +194,7 @@ class _AvailableOrdersScreenState extends State<AvailableOrdersScreen>
       const Text("No Services Available",
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
       const SizedBox(height: 8),
-      Text("No ${widget.category} Bookings right now.\nCheck back soon!",
+      Text("No ${widget.category} Bookings available right now.\nCheck back soon!",
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 13, color: Colors.grey, height: 1.6)),
       const SizedBox(height: 24),

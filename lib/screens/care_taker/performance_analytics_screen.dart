@@ -14,15 +14,35 @@ class PerformanceAnalyticsScreen extends StatefulWidget {
 }
 
 class _PerformanceAnalyticsScreenState
-    extends State<PerformanceAnalyticsScreen> {
+    extends State<PerformanceAnalyticsScreen>
+    with SingleTickerProviderStateMixin {
   bool _loading = true;
   String? _error;
   Map _data = {};
 
+  late AnimationController _animController;
+  late Animation<double> _fadeAnim;
+  late Animation<Offset> _slideAnim;
+
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0, 0.08),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic));
     _fetch();
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetch() async {
@@ -40,6 +60,7 @@ class _PerformanceAnalyticsScreenState
           _data = d["data"] ?? {};
           _loading = false;
         });
+        _animController.forward(from: 0);
       } else {
         setState(() {
           _error = d["message"]?.toString() ?? "Failed to load analytics";
@@ -62,48 +83,54 @@ class _PerformanceAnalyticsScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F4FF),
+      backgroundColor: const Color(0xFFF3F6FC),
       body: Column(children: [
         _header(),
         Expanded(
           child: _loading
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppColors.primary))
+              ? _loadingState()
               : _error != null
                   ? _errorState()
                   : RefreshIndicator(
                       color: AppColors.primary,
                       onRefresh: _fetch,
                       child: SingleChildScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _ratingHero(),
-                            const SizedBox(height: 16),
-                            _statsGrid(),
-                            const SizedBox(height: 20),
-                            _sectionTitle("Earnings Overview"),
-                            const SizedBox(height: 10),
-                            _earningsCard(),
-                            const SizedBox(height: 20),
-                            _sectionTitle("Monthly Performance"),
-                            const SizedBox(height: 10),
-                            _monthlyChart(),
-                            const SizedBox(height: 20),
-                            _sectionTitle("Rating Breakdown"),
-                            const SizedBox(height: 10),
-                            _ratingBreakdown(),
-                            const SizedBox(height: 20),
-                            if ((_data["category_breakdown"] as List?)
-                                    ?.isNotEmpty ==
-                                true) ...[
-                              _sectionTitle("Services Completed"),
-                              const SizedBox(height: 10),
-                              _categoryBreakdown(),
-                            ],
-                          ],
+                        physics: const AlwaysScrollableScrollPhysics(
+                            parent: BouncingScrollPhysics()),
+                        padding: const EdgeInsets.fromLTRB(16, 18, 16, 36),
+                        child: FadeTransition(
+                          opacity: _fadeAnim,
+                          child: SlideTransition(
+                            position: _slideAnim,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _ratingHero(),
+                                const SizedBox(height: 18),
+                                _statsGrid(),
+                                const SizedBox(height: 24),
+                                _sectionTitle("Earnings Overview", Icons.account_balance_wallet_rounded),
+                                const SizedBox(height: 12),
+                                _earningsCard(),
+                                const SizedBox(height: 24),
+                                _sectionTitle("Monthly Performance", Icons.show_chart_rounded),
+                                const SizedBox(height: 12),
+                                _monthlyChart(),
+                                const SizedBox(height: 24),
+                                _sectionTitle("Rating Breakdown", Icons.star_rounded),
+                                const SizedBox(height: 12),
+                                _ratingBreakdown(),
+                                const SizedBox(height: 24),
+                                if ((_data["category_breakdown"] as List?)
+                                        ?.isNotEmpty ==
+                                    true) ...[
+                                  _sectionTitle("Services Completed", Icons.category_rounded),
+                                  const SizedBox(height: 12),
+                                  _categoryBreakdown(),
+                                ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -115,48 +142,58 @@ class _PerformanceAnalyticsScreenState
   // ── Header ───────────────────────────────────────────────────
   Widget _header() => Container(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [AppColors.primary, AppColors.secondary],
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6), Color(0xFF0EAE8E)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius:
-              const BorderRadius.vertical(bottom: Radius.circular(24)),
+              const BorderRadius.vertical(bottom: Radius.circular(28)),
           boxShadow: [
             BoxShadow(
-                color: AppColors.primary.withOpacity(0.28),
-                blurRadius: 16,
-                offset: const Offset(0, 6))
+                color: const Color(0xFF0B8FAC).withOpacity(0.35),
+                blurRadius: 22,
+                offset: const Offset(0, 10))
           ],
         ),
         child: SafeArea(
           bottom: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 16, 18),
+            padding: const EdgeInsets.fromLTRB(12, 10, 16, 22),
             child: Row(children: [
               GestureDetector(
                 onTap: () => Navigator.pop(context),
                 child: Container(
-                  width: 40,
-                  height: 40,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.20),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.25)),
+                    color: Colors.white.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.28)),
                   ),
                   child: const Icon(Icons.arrow_back_ios_new_rounded,
                       color: Colors.white, size: 17),
                 ),
               ),
               const SizedBox(width: 12),
-              const Icon(Icons.insights_rounded, color: Colors.white, size: 24),
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.insights_rounded,
+                    color: Colors.white, size: 21),
+              ),
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
                   "Performance Analytics",
                   style: TextStyle(
                       color: Colors.white,
-                      fontSize: 17,
+                      fontSize: 18,
+                      letterSpacing: 0.2,
                       fontWeight: FontWeight.w800),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -164,18 +201,38 @@ class _PerformanceAnalyticsScreenState
               GestureDetector(
                 onTap: _fetch,
                 child: Container(
-                  width: 36,
-                  height: 36,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.18),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.refresh_rounded,
-                      color: Colors.white, size: 18),
+                      color: Colors.white, size: 19),
                 ),
               ),
             ]),
           ),
+        ),
+      );
+
+  // ── Loading state ───────────────────────────────────────────
+  Widget _loadingState() => Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 46,
+              height: 46,
+              child: CircularProgressIndicator(
+                color: AppColors.primary,
+                strokeWidth: 3.4,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text("Loading analytics...",
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+          ],
         ),
       );
 
@@ -184,20 +241,31 @@ class _PerformanceAnalyticsScreenState
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.error_outline_rounded,
-                size: 48, color: Colors.grey.shade400),
-            const SizedBox(height: 12),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.08),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.error_outline_rounded,
+                  size: 36, color: Colors.red.shade300),
+            ),
+            const SizedBox(height: 16),
             Text(_error ?? "Something went wrong",
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-            const SizedBox(height: 16),
-            ElevatedButton(
+            const SizedBox(height: 18),
+            ElevatedButton.icon(
               onPressed: _fetch,
+              icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.white),
+              label: const Text("Retry", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12))),
-              child: const Text("Retry", style: TextStyle(color: Colors.white)),
+                      borderRadius: BorderRadius.circular(14))),
             ),
           ]),
         ),
@@ -211,19 +279,19 @@ class _PerformanceAnalyticsScreenState
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-              color: const Color(0xFF0B8FAC).withOpacity(0.30),
-              blurRadius: 18,
-              offset: const Offset(0, 8))
+              color: const Color(0xFF0B8FAC).withOpacity(0.32),
+              blurRadius: 22,
+              offset: const Offset(0, 10))
         ],
       ),
       child: Row(children: [
@@ -231,28 +299,25 @@ class _PerformanceAnalyticsScreenState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                 Text(rating.toStringAsFixed(1),
                     style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 36,
+                        fontSize: 38,
                         fontWeight: FontWeight.bold)),
                 const SizedBox(width: 6),
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: Icon(Icons.star_rounded,
-                      color: Color(0xFFFFD54F), size: 24),
-                ),
+                const Icon(Icons.star_rounded,
+                    color: Color(0xFFFFD54F), size: 26),
               ]),
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Text("$reviews review${reviews == 1 ? '' : 's'}",
                   style: TextStyle(
-                      color: Colors.white.withOpacity(0.85), fontSize: 12.5)),
+                      color: Colors.white.withOpacity(0.88), fontSize: 12.5)),
             ],
           ),
         ),
-        Container(width: 1, height: 50, color: Colors.white.withOpacity(0.25)),
-        const SizedBox(width: 18),
+        Container(width: 1, height: 54, color: Colors.white.withOpacity(0.25)),
+        const SizedBox(width: 20),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -260,12 +325,12 @@ class _PerformanceAnalyticsScreenState
               Text("${completion.toStringAsFixed(0)}%",
                   style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 30,
+                      fontSize: 32,
                       fontWeight: FontWeight.bold)),
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Text("Completion Rate",
                   style: TextStyle(
-                      color: Colors.white.withOpacity(0.85), fontSize: 12.5)),
+                      color: Colors.white.withOpacity(0.88), fontSize: 12.5)),
             ],
           ),
         ),
@@ -307,10 +372,10 @@ class _PerformanceAnalyticsScreenState
       physics: const NeverScrollableScrollPhysics(),
       crossAxisSpacing: 10,
       mainAxisSpacing: 10,
-      childAspectRatio: 1.7,
+      childAspectRatio: 1.55, // was 1.7 — more vertical room fixes overflow
       children: items
           .map((it) => Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
@@ -322,25 +387,26 @@ class _PerformanceAnalyticsScreenState
                   ],
                 ),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Container(
-                      width: 32,
-                      height: 32,
+                      width: 30,
+                      height: 30,
                       decoration: BoxDecoration(
                           color: (it.$4 as Color).withOpacity(0.12),
                           borderRadius: BorderRadius.circular(10)),
                       child: Icon(it.$3 as IconData,
-                          color: it.$4 as Color, size: 17),
+                          color: it.$4 as Color, size: 16),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(it.$2 as String,
                         style: const TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.bold)),
+                            fontSize: 19, fontWeight: FontWeight.bold)),
                     Text(it.$1 as String,
                         style: TextStyle(
-                            fontSize: 11.5, color: Colors.grey.shade500)),
+                            fontSize: 11, color: Colors.grey.shade500)),
                   ],
                 ),
               ))
@@ -349,16 +415,21 @@ class _PerformanceAnalyticsScreenState
   }
 
   // ── Section title ────────────────────────────────────────────
-  Widget _sectionTitle(String label) => Row(children: [
+  Widget _sectionTitle(String label, IconData icon) => Row(children: [
         Container(
-          width: 3,
-          height: 16,
+          width: 4,
+          height: 18,
           decoration: BoxDecoration(
-              color: AppColors.primary, borderRadius: BorderRadius.circular(4)),
+              gradient: LinearGradient(
+                colors: [AppColors.primary, AppColors.secondary],
+              ),
+              borderRadius: BorderRadius.circular(4)),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 9),
+        Icon(icon, size: 17, color: AppColors.primary),
+        const SizedBox(width: 6),
         Text(label,
-            style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold)),
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
       ]);
 
   // ── Earnings card ────────────────────────────────────────────
@@ -372,17 +443,17 @@ class _PerformanceAnalyticsScreenState
     Widget row(String label, String value, Color color, {bool last = false}) =>
         Column(children: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
+            padding: const EdgeInsets.symmetric(vertical: 11),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Row(children: [
                   Container(
-                      width: 8,
-                      height: 8,
+                      width: 9,
+                      height: 9,
                       decoration:
                           BoxDecoration(color: color, shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 9),
                   Text(label,
                       style: TextStyle(
                           color: Colors.grey.shade600, fontSize: 13)),
@@ -390,7 +461,7 @@ class _PerformanceAnalyticsScreenState
                 Text(value,
                     style: TextStyle(
                         fontWeight: FontWeight.w700,
-                        fontSize: 14,
+                        fontSize: 14.5,
                         color: color)),
               ],
             ),
@@ -399,52 +470,57 @@ class _PerformanceAnalyticsScreenState
         ]);
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Column(children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text("₹${total.toStringAsFixed(0)}",
                     style: const TextStyle(
-                        fontSize: 26,
+                        fontSize: 27,
                         fontWeight: FontWeight.bold,
                         color: AppColors.primary)),
+                const SizedBox(height: 2),
                 Text("Total Earnings",
                     style: TextStyle(
                         fontSize: 12, color: Colors.grey.shade500)),
               ],
             ),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                "₹${thisMonth.toStringAsFixed(0)} this month · $thisMonthJobs job${thisMonthJobs == 1 ? '' : 's'}",
-                style: const TextStyle(
-                    color: AppColors.primary,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600),
+            Flexible(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  "₹${thisMonth.toStringAsFixed(0)} this month · $thisMonthJobs job${thisMonthJobs == 1 ? '' : 's'}",
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600),
+                ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         Divider(height: 1, color: Colors.grey.shade100),
         row("Paid Out", "₹${paid.toStringAsFixed(0)}", const Color(0xFF00875A)),
         row("Pending", "₹${pending.toStringAsFixed(0)}", const Color(0xFFE65100),
@@ -465,15 +541,15 @@ class _PerformanceAnalyticsScreenState
         .fold<int>(1, (a, b) => b > a ? b : a);
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Row(
@@ -485,30 +561,36 @@ class _PerformanceAnalyticsScreenState
           final heightFrac = jobs / maxJobs;
           return Column(
             mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text("₹${earnings.toStringAsFixed(0)}",
                   style: TextStyle(
                       fontSize: 9.5,
                       color: Colors.grey.shade500,
                       fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Container(
-                width: 26,
-                height: 90 * heightFrac.clamp(0.08, 1.0),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppColors.primary,
-                      AppColors.primary.withOpacity(0.55)
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
+              const SizedBox(height: 5),
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: heightFrac.clamp(0.08, 1.0)),
+                duration: const Duration(milliseconds: 800),
+                curve: Curves.easeOutCubic,
+                builder: (context, value, child) => Container(
+                  width: 26,
+                  height: 92 * value,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.primary,
+                        AppColors.primary.withOpacity(0.5)
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                    borderRadius:
+                        const BorderRadius.vertical(top: Radius.circular(8)),
                   ),
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(8)),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 9),
               Text(m["month"]?.toString() ?? "",
                   style: TextStyle(
                       fontSize: 11,
@@ -533,15 +615,15 @@ class _PerformanceAnalyticsScreenState
     }
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Column(
@@ -549,12 +631,12 @@ class _PerformanceAnalyticsScreenState
           final count = _i(breakdown[star.toString()] ?? breakdown[star] ?? 0);
           final frac = total > 0 ? count / total : 0.0;
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 5),
+            padding: const EdgeInsets.symmetric(vertical: 6),
             child: Row(children: [
               SizedBox(
                 width: 32,
                 child: Row(children: [
-                  Text("$star", style: const TextStyle(fontSize: 12.5)),
+                  Text("$star", style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
                   const SizedBox(width: 2),
                   const Icon(Icons.star_rounded,
                       color: Color(0xFFFFD54F), size: 13),
@@ -563,13 +645,18 @@ class _PerformanceAnalyticsScreenState
               const SizedBox(width: 8),
               Expanded(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: LinearProgressIndicator(
-                    value: frac,
-                    minHeight: 8,
-                    backgroundColor: Colors.grey.shade100,
-                    valueColor: const AlwaysStoppedAnimation(
-                        Color(0xFFFFD54F)),
+                  borderRadius: BorderRadius.circular(8),
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: frac),
+                    duration: const Duration(milliseconds: 800),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, value, child) => LinearProgressIndicator(
+                      value: value,
+                      minHeight: 9,
+                      backgroundColor: Colors.grey.shade100,
+                      valueColor: const AlwaysStoppedAnimation(
+                          Color(0xFFFFD54F)),
+                    ),
                   ),
                 ),
               ),
@@ -596,15 +683,15 @@ class _PerformanceAnalyticsScreenState
         .fold<int>(1, (a, b) => b > a ? b : a);
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Column(
@@ -613,7 +700,7 @@ class _PerformanceAnalyticsScreenState
           final count = _i(c["count"]);
           final frac = count / maxCount;
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
+            padding: const EdgeInsets.symmetric(vertical: 7),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -628,15 +715,20 @@ class _PerformanceAnalyticsScreenState
                             fontSize: 12, color: Colors.grey.shade500)),
                   ],
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 6),
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: LinearProgressIndicator(
-                    value: frac,
-                    minHeight: 7,
-                    backgroundColor: Colors.grey.shade100,
-                    valueColor:
-                        const AlwaysStoppedAnimation(AppColors.primary),
+                  borderRadius: BorderRadius.circular(8),
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: frac),
+                    duration: const Duration(milliseconds: 800),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, value, child) => LinearProgressIndicator(
+                      value: value,
+                      minHeight: 8,
+                      backgroundColor: Colors.grey.shade100,
+                      valueColor:
+                          const AlwaysStoppedAnimation(AppColors.primary),
+                    ),
                   ),
                 ),
               ],
@@ -649,14 +741,21 @@ class _PerformanceAnalyticsScreenState
 
   Widget _emptyCard(String msg) => Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(18),
         ),
         child: Center(
-          child: Text(msg,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 12.5)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.bar_chart_rounded, size: 30, color: Colors.grey.shade300),
+              const SizedBox(height: 8),
+              Text(msg,
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12.5)),
+            ],
+          ),
         ),
       );
 }

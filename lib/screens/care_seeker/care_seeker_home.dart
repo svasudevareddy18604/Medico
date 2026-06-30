@@ -30,6 +30,7 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
   List<dynamic> promotions = [];
   final PageController promoController = PageController();
   Timer? promoTimer;
+  int _currentPromoPage = 0;
 
   // ── Key so we can call _refresh() on CartScreen from outside ──────────────
   final GlobalKey<CartScreenState> _cartKey = GlobalKey<CartScreenState>();
@@ -237,55 +238,212 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
     ]),
   );
 
+  // ── Professional promo banner (PhonePe / Swiggy style) ─────────────────────
+
+  // A rotating set of professional gradient themes so cards don't look identical.
+  static const List<List<Color>> _promoGradients = [
+    [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)], // deep slate teal
+    [Color(0xFF1A2980), Color(0xFF26D0CE)],                     // indigo → teal
+    [Color(0xFF134E5E), Color(0xFF71B280)],                     // emerald slate
+    [Color(0xFF232526), Color(0xFF414345)],                     // graphite
+  ];
+
   Widget _buildPromoCarousel() {
     if (promotions.isEmpty) return const SizedBox.shrink();
-    return SizedBox(
-      height: 200,
-      child: PageView.builder(
-        controller: promoController,
-        itemCount: promotions.length,
-        itemBuilder: (context, index) {
-          final promo = promotions[index];
-          final media = promo['media']?.toString();
-          String? promoImageUrl;
-          if (media != null && media.trim().isNotEmpty) {
-            final base = Api.imageBase.endsWith("/")
-                ? Api.imageBase.substring(0, Api.imageBase.length - 1)
-                : Api.imageBase;
-            promoImageUrl = "$base${media.trim().startsWith("/") ? media.trim() : "/${media.trim()}"}";
-          }
-          return Container(
-            margin: const EdgeInsets.symmetric(horizontal: 6),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 18, offset: const Offset(0, 8))],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
-              child: Stack(fit: StackFit.expand, children: [
-                Container(decoration: const BoxDecoration(
-                    gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
-                        colors: [Color(0xFF1E88E5), Color(0xFF26C6DA), Color(0xFF00BFA5)]))),
-                if (promoImageUrl != null)
-                  Image.network(promoImageUrl, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const SizedBox()),
-                Container(decoration: BoxDecoration(
-                    gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                        colors: [Colors.transparent, Colors.black.withOpacity(0.55)]))),
-                Center(child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 28),
-                  child: Text(promo['title'] ?? "Special Offer",
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 24,
-                          fontWeight: FontWeight.bold, height: 1.3,
-                          shadows: [Shadow(offset: Offset(0, 2), blurRadius: 8, color: Colors.black45)]),
-                      maxLines: 3, overflow: TextOverflow.ellipsis),
-                )),
-              ]),
-            ),
-          );
-        },
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 188,
+          child: PageView.builder(
+            controller: promoController,
+            itemCount: promotions.length,
+            onPageChanged: (i) => setState(() => _currentPromoPage = i),
+            itemBuilder: (context, index) {
+              final promo = promotions[index];
+              final media = promo['media']?.toString();
+              String? promoImageUrl;
+              if (media != null && media.trim().isNotEmpty) {
+                final base = Api.imageBase.endsWith("/")
+                    ? Api.imageBase.substring(0, Api.imageBase.length - 1)
+                    : Api.imageBase;
+                promoImageUrl =
+                    "$base${media.trim().startsWith("/") ? media.trim() : "/${media.trim()}"}";
+              }
+              final gradient = _promoGradients[index % _promoGradients.length];
+              final title = (promo['title'] ?? "Special Offer").toString();
+              final subtitle = (promo['subtitle'] ?? "Limited time offer").toString();
+
+              return AnimatedBuilder(
+                animation: promoController,
+                builder: (context, child) {
+                  double scale = 1.0;
+                  if (promoController.position.haveDimensions) {
+                    final page = promoController.page ?? index.toDouble();
+                    scale = (1 - ((page - index).abs() * 0.05)).clamp(0.95, 1.0);
+                  }
+                  return Transform.scale(scale: scale, child: child);
+                },
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 5),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                          color: gradient.last.withOpacity(0.32),
+                          blurRadius: 16,
+                          offset: const Offset(0, 8)),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Base gradient
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: gradient,
+                            ),
+                          ),
+                        ),
+                        // Decorative diagonal accent shape (subtle, professional)
+                        Positioned(
+                          right: -30,
+                          top: -30,
+                          child: Container(
+                            width: 140,
+                            height: 140,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withOpacity(0.06),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          right: 20,
+                          bottom: -40,
+                          child: Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withOpacity(0.05),
+                            ),
+                          ),
+                        ),
+                        // Optional promo image, right-aligned, masked
+                        if (promoImageUrl != null)
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: 130,
+                            child: ShaderMask(
+                              shaderCallback: (rect) => LinearGradient(
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                                colors: [Colors.transparent, Colors.black.withOpacity(0.85)],
+                                stops: const [0.0, 0.35],
+                              ).createShader(rect),
+                              blendMode: BlendMode.dstIn,
+                              child: Image.network(promoImageUrl,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const SizedBox()),
+                            ),
+                          ),
+                        // Content
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisSize: MainAxisSize.max,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.16),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.white.withOpacity(0.25), width: 0.8),
+                                ),
+                                child: const Text("LIMITED OFFER",
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.6)),
+                              ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(title,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w800,
+                                          height: 1.18)),
+                                  const SizedBox(height: 3),
+                                  Text(subtitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: Colors.white.withOpacity(0.78),
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w400)),
+                                ],
+                              ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text("Book Now",
+                                      style: TextStyle(
+                                          color: Colors.white.withOpacity(0.95),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700)),
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.arrow_forward_rounded,
+                                      color: Colors.white, size: 13),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        // Dot indicators
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(promotions.length, (i) {
+            final active = i == _currentPromoPage;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width: active ? 18 : 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: active
+                    ? AppColors.primary
+                    : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            );
+          }),
+        ),
+      ],
     );
   }
 

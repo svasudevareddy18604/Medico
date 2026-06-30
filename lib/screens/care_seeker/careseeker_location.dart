@@ -197,9 +197,17 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      floatingActionButton: FloatingActionButton(
-        onPressed: confirmAddress, backgroundColor: AppColors.primary, elevation: 6,
-        child: const Icon(Icons.check, size: 32),
+      // FAB is now purely a "Confirm & Continue" action — selection itself
+      // happens by tapping the address card (radio indicator below makes
+      // that obvious), so the FAB no longer carries the confusing dual role.
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: confirmAddress,
+        backgroundColor: selectedAddressId == null
+            ? (isDark ? Colors.grey.shade700 : Colors.grey.shade400)
+            : AppColors.primary,
+        elevation: 6,
+        icon: const Icon(Icons.check_rounded),
+        label: const Text("Confirm Address", style: TextStyle(fontWeight: FontWeight.w700)),
       ),
       body: Column(children: [
         Container(
@@ -288,6 +296,9 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
 
             const SizedBox(height: 28),
             Text("Saved Addresses", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
+            const SizedBox(height: 4),
+            Text("Tap an address to select it for this booking",
+                style: TextStyle(fontSize: 12.5, color: subColor, fontStyle: FontStyle.italic)),
             const SizedBox(height: 12),
 
             ListView.builder(
@@ -307,11 +318,40 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
                       border: Border.all(color: sel ? AppColors.primary : (isDark ? Colors.grey.shade700 : Colors.grey.shade300), width: sel ? 2.5 : 1),
                       boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 10, offset: const Offset(0, 3))],
                     ),
-                    child: Row(children: [
-                      Icon(Icons.location_on_rounded, color: sel ? AppColors.primary : (isDark ? Colors.grey.shade400 : Colors.grey[600]), size: 32),
-                      const SizedBox(width: 16),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      // Clear radio-style selection indicator — this is what makes
+                      // tapping a card visibly "select" it, instead of relying on
+                      // a disconnected FAB tick that confused users.
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: 24, height: 24,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: sel ? AppColors.primary : Colors.transparent,
+                            border: Border.all(
+                                color: sel ? AppColors.primary : (isDark ? Colors.grey.shade600 : Colors.grey.shade400),
+                                width: 2),
+                          ),
+                          child: sel
+                              ? const Icon(Icons.check_rounded, color: Colors.white, size: 16)
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Icon(Icons.location_on_rounded, color: sel ? AppColors.primary : (isDark ? Colors.grey.shade400 : Colors.grey[600]), size: 30),
+                      const SizedBox(width: 12),
                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(a["address_line"] ?? "", style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: textColor)),
+                        Row(children: [
+                          Expanded(child: Text(a["address_line"] ?? "", style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: textColor))),
+                          if (sel)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
+                              child: const Text("SELECTED", style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                            ),
+                        ]),
                         const SizedBox(height: 4),
                         Text("${a["area"] ?? ""}, ${a["state"] ?? ""} • ${a["pincode"] ?? ""}",
                             style: TextStyle(color: subColor, fontSize: 14)),

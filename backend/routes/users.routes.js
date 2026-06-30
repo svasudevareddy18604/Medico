@@ -177,4 +177,63 @@ router.delete("/remove-profile/:id", async (req, res) => {
   }
 });
 
+/* ======================================
+   DELETE ACCOUNT (Danger Zone)
+====================================== */
+
+router.delete("/delete-account/:id", async (req, res) => {
+  const userId = req.params.id;
+
+  try {
+    const [rows] = await db.query(
+      "SELECT profile_image FROM users WHERE id = ?",
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // 🔥 Clean up Cloudinary image first
+    if (rows[0].profile_image) {
+      const publicId = getPublicIdFromUrl(rows[0].profile_image);
+      if (publicId) {
+        try {
+          await cloudinary.uploader.destroy(publicId);
+        } catch (imgErr) {
+          console.error("⚠️ Could not delete profile image:", imgErr.message);
+          // Don't block account deletion if image cleanup fails
+        }
+      }
+    }
+
+    // Option A — Hard delete (use only if you have NO related records,
+    // or your foreign keys are ON DELETE CASCADE)
+    // await db.query("DELETE FROM users WHERE id = ?", [userId]);
+
+    // Option B — Anonymize (recommended if orders/bookings reference this user)
+    await db.query(
+      `UPDATE users 
+       SET first_name = 'Deleted', 
+           last_name = 'User', 
+           email = CONCAT('deleted_', id, '@removed.local'), 
+           mobile = NULL, 
+           profile_image = NULL, 
+           password = NULL, 
+           is_deleted = 1, 
+           deleted_at = NOW()
+       WHERE id = ?`,
+      [userId]
+    );
+
+    res.json({ message: "Account deleted successfully" });
+
+  } catch (err) {
+    console.error("❌ DELETE ACCOUNT ERROR:", err.message);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
+
 module.exports = router;
