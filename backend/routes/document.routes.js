@@ -138,40 +138,38 @@ router.get(
       const order = orderRows[0];
 
       // CRITICAL SAFETY FILTER:
-      // A document can only belong to this order if:
-      //   1. its order_id matches, AND
-      //   2. it was uploaded at or after this order's created_at.
+      // Only return the LATEST upload per (order_id, document_key).
       // This guarantees that even if order_id values get reused
-      // (e.g. AUTO_INCREMENT reset after a delete/truncate), stale
-      // orphaned documents from a previous, now-deleted order can
-      // never be shown against a new order that happens to reuse
-      // the same id.
+      // (e.g. AUTO_INCREMENT reset after a delete/truncate), or a
+      // document_key gets re-uploaded multiple times for the same
+      // order, stale/duplicate rows never leak into the response —
+      // only the most recent upload for each document slot is shown.
       const [documents] = await db.query(
-  `
-  SELECT
-    bd.id,
-    bd.order_id,
-    bd.user_id,
-    bd.service_id,
-    bd.document_key,
-    bd.file_url,
-    bd.file_type,
-    bd.uploaded_at
-  FROM booking_documents bd
-  WHERE bd.order_id = ?
-    AND bd.user_id = ?
-    AND bd.is_deleted = 0
-    AND bd.uploaded_at = (
-      SELECT MAX(bd2.uploaded_at)
-      FROM booking_documents bd2
-      WHERE bd2.order_id = bd.order_id
-        AND bd2.document_key = bd.document_key
-        AND bd2.is_deleted = 0
-    )
-  ORDER BY bd.uploaded_at ASC
-  `,
-  [orderId, req.query.user_id || order.user_id]
-);
+        `
+        SELECT
+          bd.id,
+          bd.order_id,
+          bd.user_id,
+          bd.service_id,
+          bd.document_key,
+          bd.file_url,
+          bd.file_type,
+          bd.uploaded_at
+        FROM booking_documents bd
+        WHERE bd.order_id = ?
+          AND bd.user_id = ?
+          AND bd.is_deleted = 0
+          AND bd.uploaded_at = (
+            SELECT MAX(bd2.uploaded_at)
+            FROM booking_documents bd2
+            WHERE bd2.order_id = bd.order_id
+              AND bd2.document_key = bd.document_key
+              AND bd2.is_deleted = 0
+          )
+        ORDER BY bd.uploaded_at ASC
+        `,
+        [orderId, order.user_id]
+      );
 
       return res.status(200).json({
         success: true,
@@ -237,21 +235,56 @@ router.post(
         });
       }
 
-      const [result] = await db.query(
+      // Only link the SINGLE most recent pending upload per document_key.
+      // Any older abandoned pending rows for this user/service (from
+      // earlier, never-completed booking attempts) get soft-deleted
+      // instead of being swept into this order.
+      const [pendingDocs] = await db.query(
         `
-        UPDATE booking_documents
-        SET order_id = ?
+        SELECT id, document_key, uploaded_at
+        FROM booking_documents
         WHERE user_id = ?
           AND service_id = ?
           AND order_id IS NULL
           AND is_deleted = 0
+        ORDER BY uploaded_at DESC
         `,
-        [order_id, user_id, service_id]
+        [user_id, service_id]
       );
+
+      // Keep only the latest id per document_key
+      const latestIdByKey = {};
+      for (const doc of pendingDocs) {
+        if (!(doc.document_key in latestIdByKey)) {
+          latestIdByKey[doc.document_key] = doc.id;
+        }
+      }
+      const idsToLink = Object.values(latestIdByKey);
+      const idsToDiscard = pendingDocs
+        .map((d) => d.id)
+        .filter((id) => !idsToLink.includes(id));
+
+      let linked = 0;
+
+      if (idsToLink.length > 0) {
+        const [linkResult] = await db.query(
+          `UPDATE booking_documents SET order_id = ? WHERE id IN (?)`,
+          [order_id, idsToLink]
+        );
+        linked = linkResult.affectedRows;
+      }
+
+      if (idsToDiscard.length > 0) {
+        await db.query(
+          `UPDATE booking_documents SET is_deleted = 1 WHERE id IN (?)`,
+          [idsToDiscard]
+        );
+      }
 
       return res.status(200).json({
         success: true,
-        linked: result.affectedRows,
+        linked,
+        discarded_stale: idsToDiscard.length,
       });
 
     } catch (error) {

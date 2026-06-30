@@ -69,24 +69,36 @@ class _UploadDocumentsScreenState extends State<UploadDocumentsScreen>
   // ── API ──────────────────────────────────────────────────────────────────
 
   Future<void> _checkExistingDocuments() async {
-    try {
-      for (final item in widget.cartItems) {
-        final res = await http.get(Uri.parse(
-            "${Api.baseUrl}/documents/pending/${widget.userId}/${item["service_id"]}"));
-        final data = jsonDecode(res.body);
-        if (res.statusCode == 200 && data["already_uploaded"] == true) {
+  try {
+    for (final item in widget.cartItems) {
+      final res = await http.get(Uri.parse(
+          "${Api.baseUrl}/documents/pending/${widget.userId}/${item["service_id"]}"));
+      final data = jsonDecode(res.body);
+      if (res.statusCode == 200 && data["already_uploaded"] == true) {
+        final docs = (data["documents"] as List?) ?? [];
+        if (docs.isEmpty) continue;
+
+        // Only trust pending docs uploaded recently — anything older
+        // is from an abandoned booking attempt and should be re-uploaded.
+        final latest = docs.first; // backend already orders DESC by id
+        final uploadedAt = DateTime.tryParse(latest["uploaded_at"]?.toString() ?? "");
+        final isFresh = uploadedAt != null &&
+            DateTime.now().difference(uploadedAt).inHours < 2;
+
+        if (isFresh) {
           if (!mounted) return;
           setState(() {
             _alreadyUploaded = true;
-            _uploadedDocs = data["documents"] ?? [];
+            _uploadedDocs = docs;
           });
           return;
         }
       }
-    } catch (e) {
-      debugPrint("CHECK DOC ERROR: $e");
     }
+  } catch (e) {
+    debugPrint("CHECK DOC ERROR: $e");
   }
+}
 
   Future<void> _pickDocuments() async {
     final result = await FilePicker.platform.pickFiles(
