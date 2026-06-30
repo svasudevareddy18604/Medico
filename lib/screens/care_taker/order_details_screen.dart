@@ -1133,9 +1133,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                 color: AppColors.primary),
                           ),
                         )
-                      : (_isAccepted || _isConfirmed)
-                          // Swipe-to-confirm slider, only for "Start Journey"
-                          ? _SwipeToStartButton(
+                      : (!_notAccepted && (_isAccepted || _isConfirmed))
+    // Swipe-to-confirm slider, only for "Start Journey"
+    ? _SwipeToStartButton(
                               color: _blue,
                               enabled: _ctaAction != null,
                               onConfirmed: () => _ctaAction?.call(),

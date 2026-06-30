@@ -147,25 +147,31 @@ router.get(
       // never be shown against a new order that happens to reuse
       // the same id.
       const [documents] = await db.query(
-        `
-        SELECT
-          id,
-          order_id,
-          user_id,
-          service_id,
-          document_key,
-          file_url,
-          file_type,
-          uploaded_at
-        FROM booking_documents
-        WHERE order_id = ?
-          AND user_id = ?
-          AND is_deleted = 0
-          AND uploaded_at >= ?
-        ORDER BY uploaded_at ASC
-        `,
-        [orderId, order.user_id, order.created_at]
-      );
+  `
+  SELECT
+    bd.id,
+    bd.order_id,
+    bd.user_id,
+    bd.service_id,
+    bd.document_key,
+    bd.file_url,
+    bd.file_type,
+    bd.uploaded_at
+  FROM booking_documents bd
+  WHERE bd.order_id = ?
+    AND bd.user_id = ?
+    AND bd.is_deleted = 0
+    AND bd.uploaded_at = (
+      SELECT MAX(bd2.uploaded_at)
+      FROM booking_documents bd2
+      WHERE bd2.order_id = bd.order_id
+        AND bd2.document_key = bd.document_key
+        AND bd2.is_deleted = 0
+    )
+  ORDER BY bd.uploaded_at ASC
+  `,
+  [orderId, req.query.user_id || order.user_id]
+);
 
       return res.status(200).json({
         success: true,
