@@ -405,4 +405,66 @@ router.post(
 
 );
 
+/*
+=====================================
+GET UPLOADED DOCUMENTS
+GET /api/caretaker/documents/:user_id
+=====================================
+*/
+
+router.get("/documents/:user_id", async (req, res) => {
+
+  try {
+
+    const { user_id } = req.params;
+
+    const [docRows] = await db.query(
+      `
+      SELECT
+        aadhaar_front,
+        aadhaar_back,
+        pan_card,
+        certificate,
+        created_at
+      FROM caretaker_documents
+      WHERE user_id = ?
+      `,
+      [user_id]
+    );
+
+    if (docRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No documents uploaded yet"
+      });
+    }
+
+    const [userRows] = await db.query(
+      `
+      SELECT approval_status, reject_reason
+      FROM users
+      WHERE id = ?
+      `,
+      [user_id]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        ...docRows[0],
+        approval_status: userRows[0]?.approval_status || "pending",
+        reject_reason: userRows[0]?.reject_reason || null
+      }
+    });
+
+  } catch (err) {
+    console.error("FETCH DOCUMENTS ERROR:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Server error"
+    });
+  }
+
+});
+
 module.exports = router;

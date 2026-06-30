@@ -25,6 +25,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationsEnabled = true;
   bool _isDarkMode = false;
   bool _loading = true;
+  bool _deletingAccount = false;
   Map<String, dynamic>? _userData;
 
   @override
@@ -98,6 +99,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ),
   );
 
+  // ── Delete account ───────────────────────────────────────────────────────
+
+  Future<void> _deleteAccount() async {
+    setState(() => _deletingAccount = true);
+    try {
+      final res = await http.delete(
+        Uri.parse("${Api.baseUrl}/users/delete-account/${widget.userId}"),
+      );
+
+      if (!mounted) return;
+
+      if (res.statusCode == 200) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        if (!mounted) return;
+        Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
+      } else {
+        setState(() => _deletingAccount = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to delete account. Please try again.")),
+        );
+      }
+    } catch (e) {
+      debugPrint("DELETE ACCOUNT ERROR: $e");
+      if (!mounted) return;
+      setState(() => _deletingAccount = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Something went wrong. Check your connection.")),
+      );
+    }
+  }
+
+  void _confirmDeleteAccount() => showDialog(
+    context: context,
+    barrierDismissible: !_deletingAccount,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (dialogContext, setDialogState) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Delete Account"),
+        content: const Text("Are you sure? This action cannot be undone."),
+        actions: [
+          TextButton(
+            onPressed: _deletingAccount ? null : () => Navigator.pop(dialogContext),
+            child: Text("Cancel", style: TextStyle(color: AppColors.muted)),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.danger,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                foregroundColor: Colors.white,
+                shadowColor: Colors.transparent,
+                elevation: 0,
+              ),
+              onPressed: _deletingAccount
+                  ? null
+                  : () {
+                      Navigator.pop(dialogContext);
+                      _deleteAccount();
+                    },
+              child: _deletingAccount
+                  ? const SizedBox(
+                      width: 16, height: 16,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : const Text("Delete"),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   String get _firstName => (_userData?["first_name"] ?? "Care").toString();
@@ -160,6 +237,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   () => _go(const TermsConditionsScreen()), isDark),
             ]),
             _logoutCard(isDark),
+            const SizedBox(height: 18),
+            _dangerZone(isDark),
           ],
         )),
       ]),
@@ -385,5 +464,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
           size: 14, color: AppColors.danger.withOpacity(0.5)),
       onTap: _confirmLogout,
     ),
+  );
+
+  // ── Danger zone ───────────────────────────────────────────────────────────
+
+  Widget _dangerZone(bool isDark) => Container(
+    decoration: BoxDecoration(
+      color: isDark ? const Color(0xFF1C1C1E) : AppColors.cardBg,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.danger.withOpacity(0.25)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+        child: Text("DANGER ZONE",
+            style: TextStyle(
+              color: AppColors.danger,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+              letterSpacing: 1.4,
+            )),
+      ),
+      Divider(height: 1, color: AppColors.danger.withOpacity(0.15)),
+      ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+        leading: Container(
+          width: 40, height: 40,
+          decoration: BoxDecoration(
+            color: AppColors.danger.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: _deletingAccount
+              ? const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.danger),
+                )
+              : Icon(Icons.delete_forever_rounded, color: AppColors.danger, size: 20),
+        ),
+        title: Text("Delete Account",
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: AppColors.danger,
+            )),
+        subtitle: Text("Permanently remove your account and data",
+            style: TextStyle(fontSize: 11, color: isDark ? Colors.white38 : AppColors.muted)),
+        onTap: _deletingAccount ? null : _confirmDeleteAccount,
+      ),
+    ]),
   );
 }

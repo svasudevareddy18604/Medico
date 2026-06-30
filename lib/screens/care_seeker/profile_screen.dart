@@ -3,12 +3,10 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'package:medico/main.dart';
 import '../../config/api.dart';
-import '../../login_page.dart';
 
 class ProfileScreen extends StatefulWidget {
   final int userId;
@@ -57,59 +55,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (res.statusCode == 200) { setState(() => image = null); await loadProfile(); }
     } catch (_) {}
     setState(() => uploading = false);
-  }
-
-  Future<void> logout() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        final bg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final textColor = isDark ? Colors.white : const Color(0xFF0F172A);
-        final subColor = isDark ? const Color(0xFF94A3B8) : Colors.black54;
-        return Dialog(
-          backgroundColor: bg,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), shape: BoxShape.circle),
-                child: const Icon(Icons.logout_rounded, size: 36, color: Colors.redAccent)),
-              const SizedBox(height: 16),
-              Text("Logout?", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: textColor)),
-              const SizedBox(height: 8),
-              Text("You'll need to sign in again to continue.",
-                  textAlign: TextAlign.center, style: TextStyle(color: subColor, fontSize: 13.5)),
-              const SizedBox(height: 24),
-              Row(children: [
-                Expanded(child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: isDark ? const Color(0xFF334155) : Colors.grey.shade300),
-                      foregroundColor: isDark ? Colors.white : Colors.black87,
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  child: const Text("Cancel", style: TextStyle(fontWeight: FontWeight.w600)),
-                )),
-                const SizedBox(width: 12),
-                Expanded(child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  child: const Text("Logout", style: TextStyle(fontWeight: FontWeight.w700)),
-                )),
-              ]),
-            ]),
-          ),
-        );
-      },
-    );
-    if (confirm != true) return;
-    await (await SharedPreferences.getInstance()).clear();
-    Navigator.pushAndRemoveUntil(context,
-        MaterialPageRoute(builder: (_) => const LoginPage()), (r) => false);
   }
 
   Widget _buildAvatar() {
@@ -221,27 +166,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _infoTile("Email Address", user["email"] ?? "", Icons.email_outlined),
             _infoTile("Role", user["role"] ?? "", Icons.badge_outlined),
             _infoTile("Mobile", user["mobile"] ?? "", Icons.phone_outlined),
-
-            const SizedBox(height: 12),
-
-            // Logout button
-            GestureDetector(
-              onTap: logout,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 15),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.redAccent.withOpacity(0.6), width: 1.5),
-                  color: Colors.redAccent.withOpacity(isDark ? 0.08 : 0.04),
-                ),
-                child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.logout_rounded, color: Colors.redAccent, size: 20),
-                  SizedBox(width: 10),
-                  Text("Logout", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700, fontSize: 15.5)),
-                ]),
-              ),
-            ),
           ]),
         )),
       ]),
