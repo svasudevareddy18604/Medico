@@ -4,6 +4,7 @@ const db      = require("../config/db");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
 /* GET /caretaker/order-detail/:id */
+/* GET /caretaker/order-detail/:id */
 router.get("/order-detail/:id", async (req, res) => {
   try {
     const [[order]] = await db.query(`
@@ -11,11 +12,25 @@ router.get("/order-detail/:id", async (req, res) => {
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.payment_id, o.status, o.caretaker_id, o.assigned_caretaker_id,
              u.first_name AS careseeker_name, u.mobile AS careseeker_phone,
-             GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
+             GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services,
+             GROUP_CONCAT(DISTINCT bd.file_url     ORDER BY bd.uploaded_at SEPARATOR '|||') AS document_urls,
+             GROUP_CONCAT(DISTINCT bd.file_type    ORDER BY bd.uploaded_at SEPARATOR '|||') AS document_types,
+             GROUP_CONCAT(DISTINCT bd.document_key ORDER BY bd.uploaded_at SEPARATOR '|||') AS document_keys
       FROM orders o
       JOIN  users u            ON u.id        = o.user_id
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
+      LEFT JOIN booking_documents bd
+             ON bd.order_id      = o.id
+            AND bd.user_id       = o.user_id
+            AND bd.is_deleted    = 0
+            AND bd.uploaded_at   = (
+              SELECT MAX(bd2.uploaded_at)
+              FROM booking_documents bd2
+              WHERE bd2.order_id      = bd.order_id
+                AND bd2.document_key  = bd.document_key
+                AND bd2.is_deleted    = 0
+            )
       WHERE o.id = ?
       GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
