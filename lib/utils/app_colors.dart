@@ -26,7 +26,7 @@ class AppColors {
      STATUS COLORS
   ========================================================= */
 
-  static const Color success = Color.fromARGB(255, 178, 239, 200);
+  static const Color success = Color.fromARGB(255, 178, 23, 200);
 
   static const Color warning = Color(0xFFF59E0B);
 
