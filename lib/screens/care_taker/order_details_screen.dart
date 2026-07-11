@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
 import 'caretaker_payment_screen.dart';
+import 'caretaker_otp_screen.dart';
 
 class OrderDetailsScreen extends StatefulWidget {
   final Map  order;
@@ -28,6 +29,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   static const _red     = Color(0xFFEF4444);
   static const _blue    = Color(0xFF1565C0);
   static const _orange  = Color(0xFFFF6B00);
+  static const _purple  = Color(0xFF7C3AED);
 
   // ── State ────────────────────────────────────────────────────
   Map    _data    = {};
@@ -62,6 +64,16 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       .toString().toUpperCase() == "PAID";
   bool get _isCOD  => (_data["payment_method"] ?? widget.order["payment_method"] ?? "COD")
       .toString().toUpperCase() == "COD";
+
+  // Arrival OTP: 1/true once the caretaker has verified the OTP shown to
+  // the careseeker. This — not just "ON_THE_WAY" status — is what proves
+  // the caretaker actually reached the customer, so it gates payment
+  // collection and Complete Service below.
+  bool get _otpVerified {
+    final v = _data["otp_verified"] ?? widget.order["otp_verified"] ?? 0;
+    if (v is bool) return v;
+    return v.toString() == "1" || v.toString().toLowerCase() == "true";
+  }
 
   String get _rawDocUrls {
     final raw = _data["document_urls"];
@@ -274,7 +286,29 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     if (ok) {
       _toast("Journey started ✓");
       await _startLiveTracking();
+      if (mounted) _openOtpScreen();
     }
+  }
+
+  // Pushes the arrival-OTP screen. Called automatically once the journey
+  // starts, and also reachable again from the CTA button if the caretaker
+  // backs out before verifying (status stays ON_THE_WAY, otp_verified
+  // stays 0, so the CTA keeps offering "Verify Arrival OTP").
+  Future<void> _openOtpScreen() async {
+    final verified = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CaretakerOtpScreen(
+          orderId: _orderId is int ? _orderId : int.parse(_orderId.toString()),
+          caretakerId: _userId,
+          orderCode: _code,
+        ),
+      ),
+    );
+    if (verified == true) {
+      _toast("Arrival OTP verified ✓ Service started");
+    }
+    _fetch();
   }
 
   Future<void> _startLiveTracking() async {
@@ -386,8 +420,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     if (_isCancelled) return "Booking Cancelled";
     if (_notAccepted) return "Accept Booking";
     if (_isAccepted || _isConfirmed) return "Start Journey";
-    if (_onTheWay && !_isPaid) return "Collect Payment";
-    if (_onTheWay && _isPaid)  return "Complete Service";
+    if (_onTheWay && !_otpVerified) return "Verify Arrival OTP";
+    if (_onTheWay && _otpVerified && !_isPaid) return "Collect Payment";
+    if (_onTheWay && _otpVerified && _isPaid)  return "Complete Service";
     return "View Details";
   }
 
@@ -395,8 +430,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     if (_isCompleted || _isCancelled) return null;
     if (_notAccepted) return _accept;
     if (_isAccepted || _isConfirmed) return _startJourney;
-    if (_onTheWay && !_isPaid) return _goToPaymentScreen;
-    if (_onTheWay && _isPaid)  return _complete;
+    if (_onTheWay && !_otpVerified) return _openOtpScreen;
+    if (_onTheWay && _otpVerified && !_isPaid) return _goToPaymentScreen;
+    if (_onTheWay && _otpVerified && _isPaid)  return _complete;
     return null;
   }
 
@@ -404,8 +440,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     if (_isCompleted || _isCancelled) return Colors.grey;
     if (_notAccepted) return AppColors.primary;
     if (_isAccepted || _isConfirmed) return _blue;
-    if (_onTheWay && !_isPaid) return _amber;
-    if (_onTheWay && _isPaid)  return AppColors.primary;
+    if (_onTheWay && !_otpVerified) return _purple;
+    if (_onTheWay && _otpVerified && !_isPaid) return _amber;
+    if (_onTheWay && _otpVerified && _isPaid)  return AppColors.primary;
     return Colors.grey;
   }
 
@@ -414,8 +451,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     if (_isCancelled) return Icons.cancel_rounded;
     if (_notAccepted) return Icons.handshake_rounded;
     if (_isAccepted || _isConfirmed) return Icons.directions_run_rounded;
-    if (_onTheWay && !_isPaid) return Icons.payment_rounded;
-    if (_onTheWay && _isPaid)  return Icons.done_all_rounded;
+    if (_onTheWay && !_otpVerified) return Icons.verified_user_rounded;
+    if (_onTheWay && _otpVerified && !_isPaid) return Icons.payment_rounded;
+    if (_onTheWay && _otpVerified && _isPaid)  return Icons.done_all_rounded;
     return Icons.info_rounded;
   }
 
@@ -1038,9 +1076,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            _isCOD
-                                ? "COD Order — collect payment and mark payment received before completing service."
-                                : "Online Order — verify payment received, then mark complete.",
+                            !_otpVerified
+                                ? "Verify the arrival OTP given by the customer before collecting payment or completing service."
+                                : _isCOD
+                                    ? "COD Order — collect payment and mark payment received before completing service."
+                                    : "Online Order — verify payment received, then mark complete.",
                             style: TextStyle(
                                 color: Colors.grey.shade700, fontSize: 12),
                           ),
@@ -1061,7 +1101,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                       Icons.payment_rounded,
                       "Payment",
                       _amber,
-                      (!_onTheWay || _isCancelled) ? null : _goToPaymentScreen,
+                      (!_onTheWay || _isCancelled || !_otpVerified)
+                          ? null
+                          : _goToPaymentScreen,
                     ),
                     const SizedBox(width: 10),
                     // Call button — locked when COMPLETED
@@ -1403,6 +1445,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     final steps = [
       {"label": "Accepted",   "done": !_notAccepted},
       {"label": "On The Way", "done": _onTheWay || _isCompleted},
+      {"label": "Verified",   "done": _otpVerified || _isCompleted},
       {"label": "Payment",    "done": _isPaid},
       {"label": "Completed",  "done": _isCompleted},
     ];
