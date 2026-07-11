@@ -168,6 +168,7 @@ router.get("/order-detail/:id", async (req, res) => {
         o.status,
         o.caretaker_id,
         o.assigned_caretaker_id,
+        o.otp_verified,
 
         u.first_name AS careseeker_name,
         u.mobile     AS careseeker_phone,
@@ -728,8 +729,67 @@ router.post("/start", async (req, res) => {
 
   }
 });
+
+/* ═══════════════════════════════════════════════════════════
+   POST /caretaker/verify-otp
+   ✅ Matches CaretakerOtpScreen: order_id, caretaker_id, otp
+   ✅ Only valid once order is ON_THE_WAY and caretaker matches
+   ✅ Sets otp_verified = 1, which /complete now requires
+═══════════════════════════════════════════════════════════ */
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { order_id, caretaker_id, otp } = req.body;
+
+    if (!order_id || !caretaker_id || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing order_id, caretaker_id or otp"
+      });
+    }
+
+    const [[order]] = await db.query(
+      `SELECT id, otp, otp_verified, status, caretaker_id
+       FROM orders
+       WHERE id = ?`,
+      [order_id]
+    );
+
+    if (!order)
+      return res.json({ success: false, message: "Order not found" });
+
+    if (Number(order.caretaker_id) !== Number(caretaker_id))
+      return res.json({ success: false, message: "Unauthorized" });
+
+    if (order.status !== "ON_THE_WAY")
+      return res.json({
+        success: false,
+        message: `Cannot verify OTP — order is ${order.status}`
+      });
+
+    if (order.otp_verified === 1)
+      return res.json({ success: true, message: "OTP already verified" });
+
+    if (!order.otp || String(order.otp) !== String(otp)) {
+      return res.json({ success: false, message: "Invalid OTP" });
+    }
+
+    await db.query(
+      `UPDATE orders
+       SET otp_verified = 1, otp_verified_at = NOW()
+       WHERE id = ?`,
+      [order_id]
+    );
+
+    return res.json({ success: true, message: "OTP verified successfully" });
+  } catch (err) {
+    console.error("VERIFY OTP ERROR:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════
    POST /caretaker/complete
+   ✅ Now requires otp_verified = 1 before allowing completion
 ═══════════════════════════════════════════════════════════ */
 router.post("/complete", async (req, res) => {
   const connection = await db.getConnection();
@@ -764,6 +824,10 @@ router.post("/complete", async (req, res) => {
     if (Number(order.caretaker_id) !== Number(caretaker_id)) {
       await connection.rollback();
       return res.json({ success: false, message: "Unauthorized" });
+    }
+    if (order.otp_verified !== 1) {
+      await connection.rollback();
+      return res.json({ success: false, message: "Please verify arrival OTP before completing" });
     }
 
     const [[existing]] = await connection.query(
