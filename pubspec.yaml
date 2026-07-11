@@ -49,6 +49,8 @@ dependencies:
 
   image_cropper: ^11.0.0 
 
+  screen_protector: ^1.4.2
+
   # Firebase
   firebase_core: ^2.32.0
   firebase_messaging: ^14.9.4

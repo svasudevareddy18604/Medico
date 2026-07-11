@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,6 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isDarkMode = false;
   bool _loading = true;
   bool _deletingAccount = false;
+  bool _dangerZoneExpanded = false; // ✅ NEW: danger zone hidden by default
   Map<String, dynamic>? _userData;
 
   @override
@@ -131,49 +133,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _confirmDeleteAccount() => showDialog(
-    context: context,
-    barrierDismissible: !_deletingAccount,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (dialogContext, setDialogState) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Delete Account"),
-        content: const Text("Are you sure? This action cannot be undone."),
-        actions: [
-          TextButton(
-            onPressed: _deletingAccount ? null : () => Navigator.pop(dialogContext),
-            child: Text("Cancel", style: TextStyle(color: AppColors.muted)),
-          ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: AppColors.danger,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.transparent,
-                foregroundColor: Colors.white,
-                shadowColor: Colors.transparent,
-                elevation: 0,
+  /// ✅ NEW: Requires the user to type DELETE before the button even activates.
+  /// This makes an accidental / rushed tap essentially impossible.
+  void _confirmDeleteAccount() {
+    final TextEditingController controller = TextEditingController();
+    bool canDelete = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: !_deletingAccount,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Delete Account"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "This will permanently delete your account and all associated data. "
+                "This action cannot be undone.",
               ),
-              onPressed: _deletingAccount
-                  ? null
-                  : () {
-                      Navigator.pop(dialogContext);
-                      _deleteAccount();
-                    },
-              child: _deletingAccount
-                  ? const SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                    )
-                  : const Text("Delete"),
-            ),
+              const SizedBox(height: 16),
+              Text.rich(
+                TextSpan(
+                  style: TextStyle(fontSize: 13, color: AppColors.muted),
+                  children: [
+                    const TextSpan(text: "Type "),
+                    TextSpan(
+                      text: "DELETE",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.danger,
+                      ),
+                    ),
+                    const TextSpan(text: " below to confirm."),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: controller,
+                enabled: !_deletingAccount,
+                textCapitalization: TextCapitalization.characters,
+                inputFormatters: [UpperCaseTextFormatter()],
+                decoration: InputDecoration(
+                  hintText: "DELETE",
+                  isDense: true,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                onChanged: (val) {
+                  setDialogState(() => canDelete = val.trim() == "DELETE");
+                },
+              ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: _deletingAccount ? null : () => Navigator.pop(dialogContext),
+              child: Text("Cancel", style: TextStyle(color: AppColors.muted)),
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: canDelete ? AppColors.danger : AppColors.danger.withOpacity(0.35),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  foregroundColor: Colors.white,
+                  shadowColor: Colors.transparent,
+                  elevation: 0,
+                  disabledForegroundColor: Colors.white70,
+                ),
+                onPressed: (_deletingAccount || !canDelete)
+                    ? null
+                    : () {
+                        Navigator.pop(dialogContext);
+                        _deleteAccount();
+                      },
+                child: _deletingAccount
+                    ? const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Text("Delete"),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -237,7 +292,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   () => _go(const TermsConditionsScreen()), isDark),
             ]),
             _logoutCard(isDark),
-            const SizedBox(height: 18),
+            // ✅ NEW: generous breathing room + a visual divider so Danger Zone
+            // no longer sits flush under Logout where thumbs land after tapping it.
+            const SizedBox(height: 36),
+            Row(children: [
+              Expanded(child: Divider(color: isDark ? Colors.white12 : AppColors.border)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Text("ADVANCED",
+                    style: TextStyle(
+                      fontSize: 10,
+                      letterSpacing: 1.6,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white24 : AppColors.muted,
+                    )),
+              ),
+              Expanded(child: Divider(color: isDark ? Colors.white12 : AppColors.border)),
+            ]),
+            const SizedBox(height: 14),
             _dangerZone(isDark),
           ],
         )),
@@ -467,6 +539,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   );
 
   // ── Danger zone ───────────────────────────────────────────────────────────
+  // ✅ NEW IDEA: collapsed by default. User must explicitly tap "Show" to even
+  // reveal the Delete Account row — so it's physically impossible to hit it
+  // by mistake right after tapping Logout above.
 
   Widget _dangerZone(bool isDark) => Container(
     decoration: BoxDecoration(
@@ -475,43 +550,91 @@ class _SettingsScreenState extends State<SettingsScreen> {
       border: Border.all(color: AppColors.danger.withOpacity(0.25)),
     ),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-        child: Text("DANGER ZONE",
-            style: TextStyle(
-              color: AppColors.danger,
-              fontWeight: FontWeight.bold,
-              fontSize: 11,
-              letterSpacing: 1.4,
-            )),
-      ),
-      Divider(height: 1, color: AppColors.danger.withOpacity(0.15)),
-      ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
-        leading: Container(
-          width: 40, height: 40,
-          decoration: BoxDecoration(
-            color: AppColors.danger.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: _deletingAccount
-              ? const Padding(
-                  padding: EdgeInsets.all(10),
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: AppColors.danger),
-                )
-              : Icon(Icons.delete_forever_rounded, color: AppColors.danger, size: 20),
+      InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => setState(() => _dangerZoneExpanded = !_dangerZoneExpanded),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(children: [
+            Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text("DANGER ZONE",
+                  style: TextStyle(
+                    color: AppColors.danger,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    letterSpacing: 1.4,
+                  )),
+            ),
+            Text(_dangerZoneExpanded ? "Hide" : "Show",
+                style: TextStyle(
+                  color: AppColors.danger,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                )),
+            const SizedBox(width: 4),
+            AnimatedRotation(
+              turns: _dangerZoneExpanded ? 0.5 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: Icon(Icons.keyboard_arrow_down_rounded,
+                  color: AppColors.danger, size: 20),
+            ),
+          ]),
         ),
-        title: Text("Delete Account",
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-              color: AppColors.danger,
-            )),
-        subtitle: Text("Permanently remove your account and data",
-            style: TextStyle(fontSize: 11, color: isDark ? Colors.white38 : AppColors.muted)),
-        onTap: _deletingAccount ? null : _confirmDeleteAccount,
+      ),
+      AnimatedSize(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+        child: _dangerZoneExpanded
+            ? Column(children: [
+                Divider(height: 1, color: AppColors.danger.withOpacity(0.15)),
+                ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+                  leading: Container(
+                    width: 40, height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: _deletingAccount
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: AppColors.danger),
+                          )
+                        : Icon(Icons.delete_forever_rounded,
+                            color: AppColors.danger, size: 20),
+                  ),
+                  title: Text("Delete Account",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: AppColors.danger,
+                      )),
+                  subtitle: Text("Permanently remove your account and data",
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: isDark ? Colors.white38 : AppColors.muted)),
+                  onTap: _deletingAccount ? null : _confirmDeleteAccount,
+                ),
+              ])
+            : const SizedBox(width: double.infinity, height: 0),
       ),
     ]),
   );
+}
+
+/// Forces the confirmation text field to uppercase as the user types,
+/// so "delete" / "Delete" / "DELETE" all resolve consistently.
+class UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    return newValue.copyWith(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
+    );
+  }
 }

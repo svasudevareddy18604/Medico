@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:screen_protector/screen_protector.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
@@ -32,11 +33,20 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   bool         _mapReady   = false;
   List<LatLng> _routePoints = [];
 
+  // Tracks whether screenshot/screen-recording protection is currently ON,
+  // so we only toggle the native flag when the state actually changes.
+  // NOTE: protection still runs silently in the background — we simply no
+  // longer surface any UI copy about it to the user.
+  bool _screenshotBlocked = false;
+
   late AnimationController _anim;
   late Animation<double>   _fade;
 
   // ── Rich green for total amount (better contrast than a washed-out success) ──
   static const Color _totalGreen = Color(0xFF16A34A);
+
+  // ── Instagram-style verified blue for professional caretakers ────────────────
+  static const Color _verifiedBlue = Color(0xFF0095F6);
 
   // ── Dark mode ─────────────────────────────────────────────────────────────────
   bool get _dark => themeNotifier.value == ThemeMode.dark;
@@ -54,6 +64,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   bool   get _completed  => _status == "COMPLETED";
   bool   get _cancellable => ["CONFIRMED", "ACCEPTED"].contains(_status);
 
+  // Screenshots are allowed only while the booking is still pending
+  // (CONFIRMED / awaiting a caretaker). The moment it's ACCEPTED — and for
+  // every stage after that — screenshots & screen recording get blocked to
+  // protect the caretaker's live location, phone number, etc. This runs
+  // silently; no banner is shown to the user about it.
+  bool get _shouldBlockScreenshot =>
+      ["ACCEPTED", "ON_THE_WAY", "COMPLETED"].contains(_status);
+
   num  get _subtotal      => num.tryParse(_order["subtotal"]?.toString()       ?? "0") ?? 0;
   num  get _serviceCharge => num.tryParse(_order["service_charge"]?.toString() ?? "0") ?? 0;
   num  get _total         => num.tryParse(_order["total"]?.toString()           ?? "0") ?? 0;
@@ -70,6 +88,17 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
       !_completed &&
       (_order["caregiver_name"]?.toString().trim().isNotEmpty ?? false);
   String get _carerPhone => _completed ? "" : (_order["caregiver_phone"]?.toString() ?? "");
+
+  // ── Professional / verified caretaker badge (Instagram-style blue tick) ──────
+  bool get _isVerifiedCarer {
+    final v = _order["caregiver_verified"] ??
+        _order["caregiver_is_professional"] ??
+        _order["is_verified"] ??
+        _order["caretaker_verified"];
+    if (v == null) return false;
+    if (v is bool) return v;
+    return v.toString().trim().toLowerCase() == "true" || v.toString() == "1";
+  }
 
   double? get _cLat => double.tryParse(_order["caretaker_latitude"]?.toString()  ?? "");
   double? get _cLng => double.tryParse(_order["caretaker_longitude"]?.toString() ?? "");
@@ -94,7 +123,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
   String get _etaLabel {
     final mins = _meters <= 0 ? 0 : ((_meters / 1000 / 25) * 60).ceil();
     if (mins <= 0) return "Arriving soon";
-    return "~$mins min${mins == 1 ? '' : 's'} away";
+    return "Arriving in ~$mins min${mins == 1 ? '' : 's'}";
   }
 
   int get _step => switch (_status) {
@@ -117,7 +146,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
   String get _statusLabel => switch (_status) {
     "CONFIRMED"  => "Awaiting Caretaker",
     "ACCEPTED"   => "Caretaker Assigned",
-    "ON_THE_WAY" => "Caretaker On The Way",
+    "ON_THE_WAY" => "On The Way",
     "COMPLETED"  => "Service Completed",
     "CANCELLED"  => "Booking Cancelled",
     _            => _status,
@@ -165,10 +194,34 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     _timer?.cancel();
     themeNotifier.removeListener(_rb);
     _anim.dispose();
+    // Always release the screenshot lock when leaving this screen so it
+    // doesn't leak into the rest of the app.
+    ScreenProtector.preventScreenshotOff();
     super.dispose();
   }
 
   void _rb() { if (mounted) setState(() {}); }
+
+  // ── Screenshot / screen-recording protection ─────────────────────────────────
+  // Enabled the instant the booking moves to ACCEPTED (and stays enabled
+  // through ON_THE_WAY / COMPLETED). Disabled while still CONFIRMED
+  // (pending) or if the booking is CANCELLED. This is purely a native-layer
+  // protection — intentionally silent, no UI copy is shown for it.
+  Future<void> _syncScreenshotProtection() async {
+    final shouldBlock = _shouldBlockScreenshot;
+    if (shouldBlock == _screenshotBlocked) return;
+    _screenshotBlocked = shouldBlock;
+    try {
+      if (shouldBlock) {
+        await ScreenProtector.preventScreenshotOn();
+      } else {
+        await ScreenProtector.preventScreenshotOff();
+      }
+    } catch (e) {
+      debugPrint("SCREENSHOT PROTECTION ERROR: $e");
+      debugPrint("ORDER PAYLOAD: ${jsonEncode(_live)}");
+    }
+  }
 
   // ── OSRM Route ────────────────────────────────────────────────────────────────
   Future<void> _loadRoute() async {
@@ -201,6 +254,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         final data = jsonDecode(res.body);
         if (data["order"] != null && mounted) {
           setState(() { _live = data["order"]; _loading = false; });
+          await _syncScreenshotProtection();
           if (_tracking) await _loadRoute();
           if (_tracking && !_mapReady) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -466,98 +520,11 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
 
       const SizedBox(height: 28),
 
-      // ── Step progress ────────────────────────────────────────────────────────
-      SizedBox(
-        height: 102,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: List.generate(steps.length, (i) {
-            final isDone    = !_cancelled && i <= _step;
-            final isCurrent = !_cancelled && i == _step;
+      // ── Step progress — single continuous connecting line, perfectly
+      // aligned through every dot's center, so it never looks broken. ────────
+      _stepperRow(steps),
 
-            Widget line(bool filled) => Expanded(
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 6),
-                height: 5,
-                decoration: BoxDecoration(
-                  gradient: filled ? AppColors.gradient : null,
-                  color: filled ? null : (_dark ? const Color(0xFF243445) : AppColors.border),
-                  borderRadius: BorderRadius.circular(100),
-                  boxShadow: filled
-                      ? [BoxShadow(
-                          color: AppColors.primary.withOpacity(0.20),
-                          blurRadius: 8, offset: const Offset(0, 2))]
-                      : [],
-                ),
-              ),
-            );
-
-            final dot = AnimatedContainer(
-              duration: const Duration(milliseconds: 420),
-              curve: Curves.easeOutCubic,
-              width: isCurrent ? 58 : 48,
-              height: isCurrent ? 58 : 48,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: isDone ? AppColors.gradient : null,
-                color: isDone ? null : (_dark ? const Color(0xFF1C2838) : Colors.white),
-                border: Border.all(
-                  color: isDone
-                      ? Colors.transparent
-                      : (_dark ? const Color(0xFF31465C) : AppColors.border),
-                  width: 1.6,
-                ),
-                boxShadow: isCurrent
-                    ? [BoxShadow(
-                        color: AppColors.primary.withOpacity(0.36),
-                        blurRadius: 18, spreadRadius: 2, offset: const Offset(0, 5))]
-                    : isDone
-                        ? [BoxShadow(
-                            color: AppColors.primary.withOpacity(0.15),
-                            blurRadius: 10, offset: const Offset(0, 3))]
-                        : [BoxShadow(
-                            color: Colors.black.withOpacity(0.04),
-                            blurRadius: 6, offset: const Offset(0, 2))],
-              ),
-              child: Icon(
-                steps[i]["icon"] as IconData,
-                color: isDone
-                    ? Colors.white
-                    : (_dark ? const Color(0xFF5C738A) : AppColors.muted),
-                size: isCurrent ? 25 : 21,
-              ),
-            );
-
-            return Expanded(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                SizedBox(
-                  height: 58,
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                    if (i != 0) line(!_cancelled && i <= _step),
-                    dot,
-                    if (i != steps.length - 1) line(!_cancelled && i < _step),
-                  ]),
-                ),
-                const SizedBox(height: 12),
-                AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 350),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: isDone ? FontWeight.w800 : FontWeight.w600,
-                    letterSpacing: 0.2,
-                    color: isDone
-                        ? AppColors.primary
-                        : (_dark ? const Color(0xFF5C738A) : AppColors.muted),
-                  ),
-                  child: Text(steps[i]["label"] as String, textAlign: TextAlign.center),
-                ),
-              ]),
-            );
-          }),
-        ),
-      ),
-
-      const SizedBox(height: 10),
+      const SizedBox(height: 20),
 
       // ── Info / cancel note ────────────────────────────────────────────────────
       AnimatedContainer(
@@ -617,82 +584,216 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]));
   }
 
+  // ── Stepper: a single background line + a single animated foreground line,
+  // both laid out under a Row of evenly-spaced dots so the line always meets
+  // dead-center of every dot — no matter the screen width. ─────────────────────
+  Widget _stepperRow(List<Map<String, dynamic>> steps) {
+    final n = steps.length;
+    final fraction = _cancelled ? 0.0 : _step / (n - 1);
+    const dotSize = 46.0;
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final totalWidth = constraints.maxWidth;
+      final segment    = totalWidth / n;
+      final sidePad    = segment / 2;
+      final lineWidth  = totalWidth - sidePad * 2;
+
+      return SizedBox(
+        height: 92,
+        child: Stack(children: [
+          // Background (incomplete) line
+          Positioned(
+            top: dotSize / 2 - 2,
+            left: sidePad,
+            right: sidePad,
+            child: Container(
+              height: 4,
+              decoration: BoxDecoration(
+                color: _dark ? const Color(0xFF243445) : AppColors.border,
+                borderRadius: BorderRadius.circular(100),
+              ),
+            ),
+          ),
+          // Foreground (completed) line
+          Positioned(
+            top: dotSize / 2 - 2,
+            left: sidePad,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 420),
+              curve: Curves.easeOutCubic,
+              height: 4,
+              width: lineWidth * fraction,
+              decoration: BoxDecoration(
+                gradient: _cancelled ? null : AppColors.gradient,
+                color: _cancelled ? AppColors.danger.withOpacity(0.4) : null,
+                borderRadius: BorderRadius.circular(100),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withOpacity(0.22),
+                    blurRadius: 6, offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Dots + labels
+          Row(
+            children: List.generate(n, (i) {
+              final isDone    = !_cancelled && i <= _step;
+              final isCurrent = !_cancelled && i == _step;
+
+              return Expanded(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 350),
+                    width: dotSize,
+                    height: dotSize,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: isDone ? AppColors.gradient : null,
+                      color: isDone ? null : (_dark ? const Color(0xFF1C2838) : Colors.white),
+                      border: Border.all(
+                        color: isCurrent
+                            ? AppColors.primary
+                            : (isDone
+                                ? Colors.transparent
+                                : (_dark ? const Color(0xFF31465C) : AppColors.border)),
+                        width: isCurrent ? 2.4 : 1.6,
+                      ),
+                      boxShadow: isCurrent
+                          ? [BoxShadow(
+                              color: AppColors.primary.withOpacity(0.36),
+                              blurRadius: 16, spreadRadius: 2, offset: const Offset(0, 4))]
+                          : isDone
+                              ? [BoxShadow(
+                                  color: AppColors.primary.withOpacity(0.15),
+                                  blurRadius: 8, offset: const Offset(0, 2))]
+                              : [],
+                    ),
+                    child: Icon(
+                      steps[i]["icon"] as IconData,
+                      color: isDone
+                          ? Colors.white
+                          : (_dark ? const Color(0xFF5C738A) : AppColors.muted),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    steps[i]["label"] as String,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: isDone ? FontWeight.w800 : FontWeight.w600,
+                      letterSpacing: 0.2,
+                      color: isDone
+                          ? AppColors.primary
+                          : (_dark ? const Color(0xFF5C738A) : AppColors.muted),
+                    ),
+                  ),
+                ]),
+              );
+            }),
+          ),
+        ]),
+      );
+    });
+  }
+
   // ── Live Tracking Card ────────────────────────────────────────────────────────
   Widget _trackingCard() {
     final carer = LatLng(_cLat!, _cLng!);
     final user  = LatLng(_uLat!, _uLng!);
+    final carerName = _order["caregiver_name"]?.toString().trim().isNotEmpty == true
+        ? _order["caregiver_name"].toString()
+        : "Your Caretaker";
 
     return _card(child: Column(children: [
 
       // ── Carer banner ─────────────────────────────────────────────────────────
       Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           gradient: AppColors.gradient,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(20),
           boxShadow: AppColors.glowShadow,
         ),
-        child: Row(children: [
-          Container(
-            width: 52, height: 52,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1.5),
-            ),
-            child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 28),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text("Caretaker En Route",
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-              const SizedBox(height: 5),
-              Row(children: [
-                const Icon(Icons.location_on_rounded, color: Colors.white70, size: 13),
-                const SizedBox(width: 4),
-                Text(_distLabel,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
-              ]),
-              const SizedBox(height: 3),
-              Row(children: [
-                const Icon(Icons.access_time_rounded, color: Colors.white70, size: 13),
-                const SizedBox(width: 4),
-                Text(_etaLabel,
-                    style: const TextStyle(color: Colors.white70, fontSize: 12)),
-              ]),
-            ]),
-          ),
-          GestureDetector(
-            onTap: _refresh,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              width: 50, height: 50,
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.25)),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Container(
-                  width: 6, height: 6,
-                  margin: const EdgeInsets.only(right: 5),
-                  decoration: const BoxDecoration(
-                      shape: BoxShape.circle, color: Color(0xFF4ADE80)),
-                ),
-                const Text("LIVE",
+              child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 26),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(
+                    child: Text(carerName,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                  if (_isVerifiedCarer) ...[
+                    const SizedBox(width: 5),
+                    GestureDetector(
+                      onTap: _showVerifiedInfo,
+                      child: const Icon(Icons.verified_rounded, color: Colors.white, size: 16),
+                    ),
+                  ],
+                ]),
+                const SizedBox(height: 3),
+                const Text("is on the way to you",
                     style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w800,
-                        fontSize: 10, letterSpacing: 0.8)),
+                        color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w500)),
               ]),
             ),
+            GestureDetector(
+              onTap: _refresh,
+              child: Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(0.25)),
+                ),
+                child: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(100),
+              border: Border.all(color: Colors.white.withOpacity(0.22)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 6, height: 6,
+                decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF4ADE80)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text("$_etaLabel  •  $_distLabel",
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+              ),
+            ]),
           ),
         ]),
       ),
 
       const SizedBox(height: 14),
 
-      // ── Map ──────────────────────────────────────────────────────────────────
+      // ── Map (OpenStreetMap tiles) ────────────────────────────────────────────
       ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: SizedBox(
@@ -700,14 +801,20 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
           child: FlutterMap(
             mapController: _mapCtrl,
             options: MapOptions(
-              initialCenter: carer, initialZoom: 15,
+              initialCenter: carer,
+              initialZoom: 15,
+              minZoom: 3,
+              maxZoom: 19,
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
             ),
             children: [
               TileLayer(
                 urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-                userAgentPackageName: "com.example.medico",
+                userAgentPackageName: "com.medico.app",
+                maxZoom: 19,
                 tileProvider: NetworkTileProvider(),
+                errorTileCallback: (tile, error, stackTrace) =>
+                    debugPrint("MAP TILE ERROR: $error"),
               ),
               PolylineLayer(polylines: [
                 Polyline(
@@ -741,11 +848,17 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
                         boxShadow: [BoxShadow(
                             color: AppColors.primary.withOpacity(0.4), blurRadius: 6)],
                       ),
-                      child: Text(
-                        _order["caregiver_name"]?.toString().split(" ").first ?? "Nurse",
-                        style: const TextStyle(
-                            fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white),
-                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(
+                          carerName.split(" ").first,
+                          style: const TextStyle(
+                              fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
+                        if (_isVerifiedCarer) ...[
+                          const SizedBox(width: 3),
+                          const Icon(Icons.verified_rounded, size: 9, color: Colors.white),
+                        ],
+                      ]),
                     ),
                   ]),
                 ),
@@ -787,26 +900,10 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
 
       const SizedBox(height: 12),
 
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.primary.withOpacity(0.1)),
-        ),
-        child: Row(children: [
-          Icon(Icons.info_outline_rounded, size: 14, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              "Route updates every 3 seconds. Tap LIVE to refresh instantly.",
-              style: TextStyle(
-                  fontSize: 11.5,
-                  color: AppColors.primary.withOpacity(0.7),
-                  fontWeight: FontWeight.w500),
-            ),
-          ),
-        ]),
+      _noteRow(
+        icon: Icons.info_outline_rounded,
+        text: "Route updates every 3 seconds. Tap the refresh icon to update instantly.",
+        color: AppColors.primary,
       ),
     ]));
   }
@@ -896,10 +993,22 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
           const SizedBox(width: 13),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_order["caregiver_name"].toString(),
-                  style: TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w800,
-                      letterSpacing: -0.2, color: _text)),
+              Row(children: [
+                Flexible(
+                  child: Text(_order["caregiver_name"].toString(),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800,
+                          letterSpacing: -0.2, color: _text)),
+                ),
+                if (_isVerifiedCarer) ...[
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: _showVerifiedInfo,
+                    child: const Icon(Icons.verified_rounded, size: 15, color: _verifiedBlue),
+                  ),
+                ],
+              ]),
               const SizedBox(height: 3),
               if (_carerPhone.isNotEmpty)
                 Row(children: [
@@ -909,18 +1018,42 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
                       style: TextStyle(fontSize: 12, color: AppColors.muted)),
                 ]),
               const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  gradient: AppColors.gradient,
-                  borderRadius: BorderRadius.circular(7),
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    gradient: AppColors.gradient,
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                  child: Text(
+                    _status == "ON_THE_WAY" ? "En Route 🏍" : "Assigned",
+                    style: const TextStyle(
+                        fontSize: 10, color: Colors.white, fontWeight: FontWeight.w800),
+                  ),
                 ),
-                child: Text(
-                  _status == "ON_THE_WAY" ? "En Route 🏍" : "Assigned",
-                  style: const TextStyle(
-                      fontSize: 10, color: Colors.white, fontWeight: FontWeight.w800),
-                ),
-              ),
+                if (_isVerifiedCarer) ...[
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: _showVerifiedInfo,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _verifiedBlue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: _verifiedBlue.withOpacity(0.3)),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.verified_rounded, size: 10, color: _verifiedBlue),
+                        const SizedBox(width: 3),
+                        Text("Professional",
+                            style: TextStyle(
+                                fontSize: 9.5, color: _verifiedBlue,
+                                fontWeight: FontWeight.w800)),
+                      ]),
+                    ),
+                  ),
+                ],
+              ]),
             ]),
           ),
           if (_carerPhone.isNotEmpty)
@@ -962,6 +1095,71 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         ),
       ],
     ]));
+  }
+
+  // ── Verified caretaker info (Instagram-style tap-on-badge sheet) ─────────────
+  void _showVerifiedInfo() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        decoration: BoxDecoration(
+          color: _surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Center(child: _handle()),
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _verifiedBlue.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.verified_rounded, color: _verifiedBlue, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text("Professional (Verified) Caretaker",
+                  style: TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w800, color: _text)),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Text(
+            "This blue tick means the caretaker's identity, certifications and "
+            "background have been checked and verified by Medico, so you can "
+            "book with confidence.",
+            style: TextStyle(fontSize: 13.5, height: 1.5, color: _subText),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: AppColors.gradient,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: AppColors.glowShadow,
+              ),
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: const Text("Got it",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 
   // ── Privacy Block (shown when service is COMPLETED) ───────────────────────────
@@ -1618,6 +1816,29 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
   );
 
   Widget _div() => Divider(height: 24, thickness: 0.7, color: _divider);
+
+  // Small reusable "info strip" — used for the tracking tip.
+  Widget _noteRow({required IconData icon, required String text, required Color color}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.1)),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                  fontSize: 11.5, color: color.withOpacity(0.7),
+                  fontWeight: FontWeight.w500, height: 1.4),
+            ),
+          ),
+        ]),
+      );
 
   Widget _tag(IconData icon, String label, {bool outline = false}) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),

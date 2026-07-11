@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "com.example.medico"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "28.2.13676358"  // pin NDK — cashfree_pg requires a stable NDK
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -22,7 +22,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.medico"
-        minSdk = flutter.minSdkVersion                        // cashfree_pg hard-requires minSdk 21
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

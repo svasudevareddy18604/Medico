@@ -33,7 +33,10 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
   LatLng selectedLocation = const LatLng(13.0827, 80.2707);
   bool loadingLocation = false, saving = false;
   List<dynamic> addresses = [];
-  int? selectedAddressId;
+
+  // ✅ NEW: tracks which address card is currently being confirmed (shows a
+  // small inline spinner on that specific card instead of a separate FAB).
+  int? _confirmingAddressId;
 
   bool get isDark => themeNotifier.value == ThemeMode.dark;
   void _onThemeChange() { if (mounted) setState(() {}); }
@@ -146,21 +149,42 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
     fetchAddresses(); showToast("Address deleted", type: ToastType.info);
   }
 
-  Future<void> confirmAddress() async {
-    if (selectedAddressId == null) { showToast("Please select an address", type: ToastType.warning); return; }
-    final selected = addresses.firstWhere((a) => a["id"] == selectedAddressId);
-    final allowed = await LocationCheckService.checkLocation(
-        state: selected["state"] ?? "", area: selected["area"] ?? "", pincode: selected["pincode"] ?? "");
-    if (!allowed) { Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => LocationBlockScreen(userId: widget.userId))); return; }
-    final prefs = await SharedPreferences.getInstance();
-    await http.post(Uri.parse("${Api.baseUrl}/addresses/set-default"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"user_id": widget.userId, "address_id": selected["id"]}));
-    await prefs.setInt("selected_address_id_${widget.userId}", selected["id"]);
-    await prefs.setString("user_location_${widget.userId}", "${selected["address_line"]}, ${selected["area"]}");
-    await prefs.setDouble("user_lat_${widget.userId}", double.tryParse(selected["latitude"].toString()) ?? 0.0);
-    await prefs.setDouble("user_lng_${widget.userId}", double.tryParse(selected["longitude"].toString()) ?? 0.0);
-    Navigator.pop(context);
+  // ✅ NEW IDEA: one tap = select AND confirm. No separate "Confirm Address"
+  // button anymore. Tapping a card immediately runs the location-eligibility
+  // check, saves it as the active address, and closes the screen — with a
+  // small inline spinner on that card so the user sees it's processing.
+  Future<void> _selectAddress(dynamic a) async {
+    if (_confirmingAddressId != null) return; // prevent double taps mid-flight
+    setState(() => _confirmingAddressId = a["id"]);
+
+    try {
+      final allowed = await LocationCheckService.checkLocation(
+          state: a["state"] ?? "", area: a["area"] ?? "", pincode: a["pincode"] ?? "");
+
+      if (!mounted) return;
+
+      if (!allowed) {
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => LocationBlockScreen(userId: widget.userId)));
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await http.post(Uri.parse("${Api.baseUrl}/addresses/set-default"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({"user_id": widget.userId, "address_id": a["id"]}));
+      await prefs.setInt("selected_address_id_${widget.userId}", a["id"]);
+      await prefs.setString("user_location_${widget.userId}", "${a["address_line"]}, ${a["area"]}");
+      await prefs.setDouble("user_lat_${widget.userId}", double.tryParse(a["latitude"].toString()) ?? 0.0);
+      await prefs.setDouble("user_lng_${widget.userId}", double.tryParse(a["longitude"].toString()) ?? 0.0);
+
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        showToast("Could not select this address. Try again.", type: ToastType.error);
+        setState(() => _confirmingAddressId = null);
+      }
+    }
   }
 
   Widget _field(TextEditingController c, String label, IconData icon,
@@ -197,18 +221,8 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      // FAB is now purely a "Confirm & Continue" action — selection itself
-      // happens by tapping the address card (radio indicator below makes
-      // that obvious), so the FAB no longer carries the confusing dual role.
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: confirmAddress,
-        backgroundColor: selectedAddressId == null
-            ? (isDark ? Colors.grey.shade700 : Colors.grey.shade400)
-            : AppColors.primary,
-        elevation: 6,
-        icon: const Icon(Icons.check_rounded),
-        label: const Text("Confirm Address", style: TextStyle(fontWeight: FontWeight.w700)),
-      ),
+      // ✅ FAB removed — selection now happens directly on tap of an address
+      // card, so a separate "Confirm" action would just be a redundant step.
       body: Column(children: [
         Container(
           width: double.infinity,
@@ -296,10 +310,37 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
 
             const SizedBox(height: 28),
             Text("Saved Addresses", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
-            const SizedBox(height: 4),
-            Text("Tap an address to select it for this booking",
-                style: TextStyle(fontSize: 12.5, color: subColor, fontStyle: FontStyle.italic)),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+
+            // ✅ NEW: professional inline info banner explaining the one-tap
+            // selection behaviour, replacing the old italic hint line.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(isDark ? 0.14 : 0.07),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.primary.withOpacity(0.25)),
+              ),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "Select the booking address you'd like to use by tapping it once. "
+                    "It will be applied automatically — no extra confirmation needed.",
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                      color: isDark ? Colors.grey.shade300 : Colors.grey.shade800,
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+
+            const SizedBox(height: 14),
 
             ListView.builder(
               shrinkWrap: true,
@@ -307,65 +348,70 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
               itemCount: addresses.length,
               itemBuilder: (_, i) {
                 final a = addresses[i];
-                final bool sel = selectedAddressId == a["id"];
+                final bool isConfirming = _confirmingAddressId == a["id"];
+                final bool anyConfirming = _confirmingAddressId != null;
                 return GestureDetector(
-                  onTap: () => setState(() => selectedAddressId = a["id"]),
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: sel ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.08) : cardBg,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: sel ? AppColors.primary : (isDark ? Colors.grey.shade700 : Colors.grey.shade300), width: sel ? 2.5 : 1),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 10, offset: const Offset(0, 3))],
-                    ),
-                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      // Clear radio-style selection indicator — this is what makes
-                      // tapping a card visibly "select" it, instead of relying on
-                      // a disconnected FAB tick that confused users.
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          width: 24, height: 24,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: sel ? AppColors.primary : Colors.transparent,
-                            border: Border.all(
-                                color: sel ? AppColors.primary : (isDark ? Colors.grey.shade600 : Colors.grey.shade400),
-                                width: 2),
-                          ),
-                          child: sel
-                              ? const Icon(Icons.check_rounded, color: Colors.white, size: 16)
-                              : null,
-                        ),
+                  onTap: anyConfirming ? null : () => _selectAddress(a),
+                  child: Opacity(
+                    opacity: (anyConfirming && !isConfirming) ? 0.5 : 1,
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isConfirming ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.08) : cardBg,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: isConfirming ? AppColors.primary : (isDark ? Colors.grey.shade700 : Colors.grey.shade300), width: isConfirming ? 2.5 : 1),
+                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 10, offset: const Offset(0, 3))],
                       ),
-                      const SizedBox(width: 14),
-                      Icon(Icons.location_on_rounded, color: sel ? AppColors.primary : (isDark ? Colors.grey.shade400 : Colors.grey[600]), size: 30),
-                      const SizedBox(width: 12),
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children: [
-                          Expanded(child: Text(a["address_line"] ?? "", style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: textColor))),
-                          if (sel)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
-                              child: const Text("SELECTED", style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
-                            ),
-                        ]),
-                        const SizedBox(height: 4),
-                        Text("${a["area"] ?? ""}, ${a["state"] ?? ""} • ${a["pincode"] ?? ""}",
-                            style: TextStyle(color: subColor, fontSize: 14)),
-                        if ((a["landmark"] ?? "").toString().isNotEmpty)
-                          Padding(padding: const EdgeInsets.only(top: 6),
-                              child: Text("Landmark: ${a["landmark"]}", style: TextStyle(color: isDark ? Colors.grey.shade500 : Colors.grey.shade600, fontSize: 13))),
-                      ])),
-                      IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent), onPressed: () => deleteAddress(a["id"])),
-                    ]),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        // Tap indicator: plain circle normally, spinner while this
+                        // specific card is being confirmed.
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: SizedBox(
+                            width: 24, height: 24,
+                            child: isConfirming
+                                ? CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.primary)
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                          color: isDark ? Colors.grey.shade600 : Colors.grey.shade400,
+                                          width: 2),
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Icon(Icons.location_on_rounded, color: isConfirming ? AppColors.primary : (isDark ? Colors.grey.shade400 : Colors.grey[600]), size: 30),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            Expanded(child: Text(a["address_line"] ?? "", style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: textColor))),
+                            if (isConfirming)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
+                                child: const Text("SELECTING...", style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                              ),
+                          ]),
+                          const SizedBox(height: 4),
+                          Text("${a["area"] ?? ""}, ${a["state"] ?? ""} • ${a["pincode"] ?? ""}",
+                              style: TextStyle(color: subColor, fontSize: 14)),
+                          if ((a["landmark"] ?? "").toString().isNotEmpty)
+                            Padding(padding: const EdgeInsets.only(top: 6),
+                                child: Text("Landmark: ${a["landmark"]}", style: TextStyle(color: isDark ? Colors.grey.shade500 : Colors.grey.shade600, fontSize: 13))),
+                        ])),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          onPressed: anyConfirming ? null : () => deleteAddress(a["id"]),
+                        ),
+                      ]),
+                    ),
                   ),
                 );
               },
             ),
-            const SizedBox(height: 100),
+            const SizedBox(height: 40),
           ]),
         )),
       ]),

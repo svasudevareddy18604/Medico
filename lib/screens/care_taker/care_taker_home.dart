@@ -234,7 +234,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
               ),
               const SizedBox(height: 12),
               Text(
-                "Your availability has been locked by the admin due to inactive of your account.\n\nYou cannot go online on your own. Please contact the Medico admin team to reactivate your account.",
+                "Your availability has been locked by the medico support team due to inactive of your account.\n\nYou cannot go online on your own. Please contact the Medico Support team thorugh chat to reactivate your account.",
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13.5, color: Colors.grey.shade700, height: 1.6),
               ),
@@ -252,7 +252,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                     Icon(Icons.support_agent_rounded, size: 16, color: Colors.orange.shade700),
                     const SizedBox(width: 8),
                     Text(
-                      "Contact Admin to reactivate",
+                      "Contact Us to reactivate",
                       style: TextStyle(
                           fontSize: 12.5,
                           color: Colors.orange.shade800,
@@ -315,7 +315,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  "Account Locked by Admin",
+                  "Account Locked by Medico Support team",
                   style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -323,7 +323,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                 ),
                 SizedBox(height: 2),
                 Text(
-                  "Contact Medico admin to reactivate.",
+                  "Contact Medico Support team to reactivate.",
                   style: TextStyle(color: Colors.white70, fontSize: 11.5),
                 ),
               ],
@@ -528,7 +528,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                       const SizedBox(height: 3),
                       Text(
                         isLocked
-                            ? "Admin has restricted your access"
+                            ? "Medico Support team has restricted your access"
                             : (isAvailable
                                 ? "Visible to CareSeekers · Accepting Services"
                                 : "Hidden from CareSeekers · Not accepting Services"),
@@ -633,7 +633,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      "Contact Medico admin to reactivate your account.",
+                      "Contact Medico Support team to reactivate your account.",
                       style: TextStyle(
                           fontSize: 12,
                           color: Colors.orange.shade900,

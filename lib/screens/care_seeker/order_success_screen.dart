@@ -259,7 +259,7 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
       const SizedBox(height: 8),
       Text(
         _orders.isNotEmpty
-            ? "${_orders.length} service order${_orders.length > 1 ? 's' : ''} placed successfully."
+            ? "${_orders.length} Booking ${_orders.length > 1 ? 's' : ''} placed successfully."
             : "Your service has been booked successfully.",
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 13.5, height: 1.55,

@@ -184,7 +184,7 @@ class _LoginPageState extends State<LoginPage> {
               const _ShimmerMedicoText(),
               const SizedBox(height: 4),
               const Text(
-                "CARE ANYTIME ANYWHERE",
+                "Healthcare Services at Home",
                 style: TextStyle(color: Colors.white70, fontSize: 14),
               ),
             ]),
