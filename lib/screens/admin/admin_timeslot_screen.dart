@@ -18,6 +18,7 @@ class _AdminTimeSlotScreenState extends State<AdminTimeSlotScreen> {
   TimeOfDay? selectedTime;
   String searchQuery = "";
   bool loading = false;
+  bool creating = false; // ✅ NEW — tracks in-flight create request for button feedback
   Map<String, List> groupedSlots = {};
 
   @override
@@ -75,15 +76,21 @@ class _AdminTimeSlotScreenState extends State<AdminTimeSlotScreen> {
       _snack("Please select both date & time");
       return;
     }
+    setState(() => creating = true); // ✅ NEW
     final date = "${selectedDate!.year}-${selectedDate!.month.toString().padLeft(2,'0')}-${selectedDate!.day.toString().padLeft(2,'0')}";
     final time = "${selectedTime!.hour.toString().padLeft(2,'0')}:${selectedTime!.minute.toString().padLeft(2,'0')}:00";
-    await http.post(
-      Uri.parse("$baseUrl/create"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({"slot_date": date, "slot_time": time}),
-    );
-    setState(() => selectedTime = null);
-    loadSlots();
+    try {
+      await http.post(
+        Uri.parse("$baseUrl/create"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"slot_date": date, "slot_time": time}),
+      );
+      setState(() => selectedTime = null);
+      await loadSlots();
+      if (mounted) _snack("Slot created successfully");
+    } finally {
+      if (mounted) setState(() => creating = false); // ✅ NEW
+    }
   }
 
   Future<void> deleteSlot(int id) async {
@@ -196,6 +203,36 @@ class _AdminTimeSlotScreenState extends State<AdminTimeSlotScreen> {
       ),
     );
 
+  // ✅ NEW — Create Slot action, now anchored right under the pickers instead of a
+  // floating button at the bottom of the screen (which read as disconnected from
+  // the date/time selection above it).
+  Widget _createSlotButton() {
+    final ready = selectedDate != null && selectedTime != null;
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: creating ? null : createSlot,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: ready ? AppColors.primary : Colors.grey.shade300,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 15),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+        icon: creating
+            ? const SizedBox(
+                width: 18, height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+              )
+            : const Icon(Icons.add_rounded, size: 20),
+        label: Text(
+          creating ? "Creating..." : "Create Slot",
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+
   Widget _searchBar() => Container(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     decoration: BoxDecoration(
@@ -299,13 +336,8 @@ class _AdminTimeSlotScreenState extends State<AdminTimeSlotScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF3F6F9),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: createSlot,
-        backgroundColor: AppColors.primary,
-        elevation: 4,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text("Create Slot", style: TextStyle(fontWeight: FontWeight.bold)),
-      ),
+      // ✅ Removed the bottom floatingActionButton — Create Slot now lives
+      // right under the pickers, so the action sits next to what it acts on.
       body: Column(children: [
         _header(),
         Expanded(
@@ -328,6 +360,9 @@ class _AdminTimeSlotScreenState extends State<AdminTimeSlotScreen> {
               ]),
 
               const SizedBox(height: 12),
+              _createSlotButton(), // ✅ NEW — moved up from the bottom FAB
+
+              const SizedBox(height: 16),
               _searchBar(),
               const SizedBox(height: 20),
 
@@ -350,7 +385,7 @@ class _AdminTimeSlotScreenState extends State<AdminTimeSlotScreen> {
                 ])))
               else
                 Expanded(child: ListView(
-                  padding: const EdgeInsets.only(bottom: 80),
+                  padding: const EdgeInsets.only(bottom: 24),
                   children: data.entries.map((e) => _dateGroup(e.key, e.value)).toList(),
                 )),
             ]),

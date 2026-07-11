@@ -109,14 +109,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         MaterialPageRoute(builder: (_) => const AdminServices())),
                   ),
                   DashboardCard(
-                    title: "Users",
+                    title: "CareSeekers",
                     icon: Icons.people_alt_rounded,
                     color: const Color(0xFF2979FF),
                     onTap: () => Navigator.push(context,
                         MaterialPageRoute(builder: (_) => const AdminUsers())),
                   ),
                   DashboardCard(
-                    title: "Orders",
+                    title: "Bookings",
                     icon: Icons.assignment_rounded,
                     color: const Color(0xFFFF8C00),
                     onTap: () => Navigator.push(context,

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:medico/config/api.dart';
 import 'package:medico/utils/app_colors.dart';
+import 'package:medico/screens/admin/document_viewer_screen.dart'; // ✅ NEW
 
 class AdminOrderDetailsScreen extends StatefulWidget {
   final Map order;
@@ -16,7 +17,9 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   late Map o;
   bool _loadingCaretakers = false;
   bool _loadingRefund     = false;
+  bool _loadingDocuments  = false; // ✅ NEW
   List _caretakers        = [];
+  List _documents         = [];   // ✅ NEW
   Map? _refundRequest;
 
   @override
@@ -24,6 +27,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     super.initState();
     o = Map.from(widget.order);
     _fetchRefundRequest();
+    _fetchDocuments(); // ✅ NEW
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -59,6 +63,37 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
 
   String get _cancelledCaretakerMobile =>
       o['cancelled_caretaker_mobile']?.toString() ?? "";
+
+  // ✅ NEW — turns "id_proof_front" into "Id Proof Front"
+  String _prettyDocKey(String key) {
+    if (key.isEmpty) return "Document";
+    return key
+        .replaceAll('_', ' ')
+        .split(' ')
+        .map((w) => w.isEmpty ? w : "${w[0].toUpperCase()}${w.substring(1)}")
+        .join(' ');
+  }
+
+  // ✅ NEW — turns an ISO timestamp into "11 Jul 2026 · 6:45 PM"
+  String _formatDateTime(String? raw) {
+    if (raw == null || raw.isEmpty) return "-";
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      const months = [
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+      final day = dt.day.toString().padLeft(2, '0');
+      final month = months[dt.month - 1];
+      var hour = dt.hour % 12;
+      if (hour == 0) hour = 12;
+      final minute = dt.minute.toString().padLeft(2, '0');
+      final period = dt.hour >= 12 ? 'PM' : 'AM';
+      return "$day $month ${dt.year} · $hour:$minute $period";
+    } catch (_) {
+      return raw;
+    }
+  }
 
   // ── Refund ────────────────────────────────────────────────────────────────
   Future<void> _fetchRefundRequest() async {
@@ -149,6 +184,23 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
       _snack("Error: $e", Colors.red);
     } finally {
       setState(() => _loadingCaretakers = false);
+    }
+  }
+
+  // ✅ NEW — Fetch documents uploaded by the careseeker for this order
+  Future<void> _fetchDocuments() async {
+    setState(() => _loadingDocuments = true);
+    try {
+      final res = await http.get(
+          Uri.parse("${Api.baseUrl}/documents/order/${o['id']}"));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        setState(() => _documents = List.from(decoded['documents'] ?? []));
+      }
+    } catch (_) {
+      // Silently ignore — documents are supplementary, not critical path.
+    } finally {
+      if (mounted) setState(() => _loadingDocuments = false);
     }
   }
 
@@ -590,6 +642,216 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     ]);
   }
 
+  // ✅ NEW — Uploaded Documents section: neat 2-column grid, tap → full-screen viewer
+  Widget _buildDocumentsSection() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _section("Uploaded Documents", Icons.folder_copy_rounded, Colors.indigo),
+      _loadingDocuments
+          ? _card(const Center(child: Padding(
+              padding: EdgeInsets.all(12),
+              child: CircularProgressIndicator())))
+          : _documents.isEmpty
+              ? _card(Row(children: [
+                  Icon(Icons.folder_off_rounded, color: Colors.grey[400], size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text("No documents uploaded by the careseeker yet",
+                      style: TextStyle(color: Colors.grey[500], fontSize: 13))),
+                ]))
+              : GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _documents.length,
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.88,
+                  ),
+                  itemBuilder: (_, i) {
+                    final doc = _documents[i];
+                    final isPdf = (doc['file_type'] ?? '').toString().toLowerCase() == 'pdf';
+                    final key   = _prettyDocKey(doc['document_key']?.toString() ?? '');
+
+                    return GestureDetector(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => DocumentViewerScreen(
+                            documents: _documents,
+                            initialIndex: i,
+                          ),
+                        ),
+                      ),
+                      child: Container(
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.grey[200]!),
+                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04),
+                              blurRadius: 8, offset: const Offset(0, 3))],
+                        ),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Expanded(
+                            child: Stack(fit: StackFit.expand, children: [
+                              isPdf
+                                  ? Container(
+                                      color: const Color(0xFFFDEDEC),
+                                      child: const Center(
+                                        child: Icon(Icons.picture_as_pdf_rounded,
+                                            color: Colors.redAccent, size: 40),
+                                      ),
+                                    )
+                                  : Image.network(
+                                      doc['file_url'] ?? '',
+                                      fit: BoxFit.cover,
+                                      loadingBuilder: (context, child, progress) {
+                                        if (progress == null) return child;
+                                        return Container(
+                                          color: Colors.grey[100],
+                                          child: const Center(
+                                            child: SizedBox(
+                                              width: 18, height: 18,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      errorBuilder: (_, __, ___) => Container(
+                                        color: Colors.grey[100],
+                                        child: Icon(Icons.broken_image_rounded,
+                                            color: Colors.grey[400], size: 30),
+                                      ),
+                                    ),
+                              // Small zoom hint
+                              Positioned(
+                                right: 6, bottom: 6,
+                                child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.45),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.fullscreen_rounded,
+                                      color: Colors.white, size: 14),
+                                ),
+                              ),
+                            ]),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(key,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12.5,
+                                      fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
+                              const SizedBox(height: 3),
+                              Row(children: [
+                                Icon(isPdf ? Icons.picture_as_pdf_rounded : Icons.image_rounded,
+                                    size: 12, color: Colors.grey[400]),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    doc['uploaded_at'] != null
+                                        ? _formatDateTime(doc['uploaded_at'].toString())
+                                        : (isPdf ? "PDF" : "Image"),
+                                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 10.5, color: Colors.grey[500]),
+                                  ),
+                                ),
+                              ]),
+                            ]),
+                          ),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
+    ]);
+  }
+
+  // ✅ NEW — Timeline as a proper connected vertical timeline
+  Widget _buildTimelineSection() {
+    final items = <Map<String, dynamic>>[
+      {
+        'label': "Order Created",
+        'value': o['created_at'],
+        'icon': Icons.add_circle_rounded,
+        'color': Colors.blueGrey,
+      },
+      if (o['accepted_at'] != null)
+        {
+          'label': "Caretaker Accepted",
+          'value': o['accepted_at'],
+          'icon': Icons.check_circle_rounded,
+          'color': const Color(0xFF2979FF),
+        },
+      if (o['completed_at'] != null)
+        {
+          'label': "Service Completed",
+          'value': o['completed_at'],
+          'icon': Icons.task_alt_rounded,
+          'color': const Color(0xFF1B7F6E),
+        },
+      if (o['cancelled_at'] != null)
+        {
+          'label': _wasCancelledByCaretaker ? "Cancelled by Caretaker" : "Order Cancelled",
+          'value': o['cancelled_at'],
+          'icon': Icons.cancel_rounded,
+          'color': Colors.red,
+        },
+    ];
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _section("Timeline", Icons.timeline_rounded, Colors.teal),
+      _card(Column(
+        children: List.generate(items.length, (i) {
+          final item = items[i];
+          final isLast = i == items.length - 1;
+          final color = item['color'] as Color;
+
+          return IntrinsicHeight(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Column(children: [
+                Container(
+                  width: 30, height: 30,
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color, width: 1.5),
+                  ),
+                  child: Icon(item['icon'] as IconData, color: color, size: 16),
+                ),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      color: Colors.grey[200],
+                    ),
+                  ),
+              ]),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(top: 4, bottom: isLast ? 2 : 22),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(item['label'] as String,
+                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold,
+                            color: Color(0xFF2D3142))),
+                    const SizedBox(height: 3),
+                    Text(_formatDateTime(item['value']?.toString()),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+                  ]),
+                ),
+              ),
+            ]),
+          );
+        }),
+      )),
+    ]);
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   //  BUILD
   // ════════════════════════════════════════════════════════════════════════
@@ -727,14 +989,11 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
             // Refund
             _buildRefundSection(),
 
-            // Timeline
-            _section("Timeline", Icons.timeline_rounded, Colors.teal),
-            _card(Column(children: [
-              _row("Created At", o['created_at']?.toString() ?? "-"),
-              if (o['accepted_at']  != null) _row("Accepted At",  o['accepted_at'].toString()),
-              if (o['completed_at'] != null) _row("Completed At", o['completed_at'].toString()),
-              if (o['cancelled_at'] != null) _row("Cancelled At", o['cancelled_at'].toString()),
-            ])),
+            // ✅ Uploaded Documents (NEW)
+            _buildDocumentsSection(),
+
+            // ✅ Timeline (redesigned as vertical timeline)
+            _buildTimelineSection(),
 
             // Cancel reason (non-caretaker cancel)
             if (o['cancel_reason'] != null && !_wasCancelledByCaretaker) ...[

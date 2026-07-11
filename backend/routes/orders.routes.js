@@ -18,6 +18,14 @@ const generateOrderCode = () => {
   return code;
 };
 
+// ✅ NEW — 4-digit Service OTP, shown to the careseeker and later verified
+// by the caretaker on-site (Phase 1: generate + display only).
+const generateOtp = () => {
+  // Math.floor(1000 + rand*9000) always yields a 4-digit number (1000-9999),
+  // so no leading-zero padding is needed.
+  return Math.floor(1000 + Math.random() * 9000).toString();
+};
+
 const fmtDate = (d) =>
   d
     ? new Date(d).toLocaleDateString("en-IN", {
@@ -90,6 +98,8 @@ router.get("/detail/:id", async (req, res) => {
   try {
     const [[order]] = await db.query(
       `SELECT o.*, o.subtotal, o.service_charge,
+              o.otp, o.otp_verified, o.otp_created_at,
+              o.otp_used_at, o.otp_expired,
               GROUP_CONCAT(s.name SEPARATOR ', ') AS service_names,
               ct.first_name AS caregiver_name,
               ct.mobile     AS caregiver_phone
@@ -251,14 +261,19 @@ router.post("/place", async (req, res) => {
         }
       }
 
+      // ✅ NEW — one Service OTP per created order (each grouped order gets
+      // its own OTP, since a careseeker could have multiple caretakers).
+      const otp = generateOtp();
+
       const [orderRes] = await conn.query(
         `INSERT INTO orders
          (order_code, user_id, location, date, slot,
           subtotal, service_charge, discount_amount, coupon_code, total,
           payment_method, payment_id,
           status, latitude, longitude,
-          payment_status, category)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)`,
+          payment_status, category,
+          otp, otp_verified, otp_created_at, otp_expired)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?, ?, 0, NOW(), 0)`,
         [
           orderCode,
           user_id,
@@ -276,6 +291,7 @@ router.post("/place", async (req, res) => {
           longitude || null,
           isPaid ? "PAID" : "PENDING",
           category,
+          otp,
         ]
       );
       const orderId = orderRes.insertId;
@@ -306,6 +322,7 @@ router.post("/place", async (req, res) => {
         discount:      groupDiscount,
         total,
         service_name:  serviceNamesForOrder,
+        otp,                    // ✅ NEW — returned so the app can show it immediately
       });
     }
 
@@ -391,7 +408,8 @@ router.post("/:orderId/cancel", async (req, res) => {
            cancel_reason = ?,
            cancelled_at  = NOW(),
            refund_amount = ?,
-           refund_status = ?
+           refund_status = ?,
+           otp_expired   = 1
        WHERE id = ?`,
       [
         reason || "",
