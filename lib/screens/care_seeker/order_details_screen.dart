@@ -122,6 +122,29 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     return s == "true" || s == "1" || double.tryParse(s) != null && double.parse(s) > 0;
   }
 
+  // ✅ NEW — Service OTP getters
+  bool get _hasOtp =>
+      (_order["otp"]?.toString().trim().isNotEmpty ?? false);
+
+  bool get _otpExpired {
+    final v = _order["otp_expired"];
+    if (v == null) return false;
+    if (v is bool) return v;
+    return v.toString() == "1" || v.toString().toLowerCase() == "true";
+  }
+
+  bool get _otpVerified {
+    final v = _order["otp_verified"];
+    if (v == null) return false;
+    if (v is bool) return v;
+    return v.toString() == "1" || v.toString().toLowerCase() == "true";
+  }
+
+  // Shown for any active (non-cancelled, non-completed) booking that has an
+  // OTP which hasn't expired yet — i.e. from the moment the order is placed
+  // right up until the service is marked complete.
+  bool get _showOtpCard => _hasOtp && !_completed && !_cancelled && !_otpExpired;
+
   double? get _cLat => double.tryParse(_order["caretaker_latitude"]?.toString()  ?? "");
   double? get _cLng => double.tryParse(_order["caretaker_longitude"]?.toString() ?? "");
   double? get _uLat => double.tryParse(_order["latitude"]?.toString()            ?? "");
@@ -362,6 +385,13 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       _sectionLabel("Booking Progress"),
                       _progressCard(),
+                      // ✅ NEW — Service OTP, shown right after progress so
+                      // it's easy to find and hand to the caretaker.
+                      if (_showOtpCard) ...[
+                        const SizedBox(height: 20),
+                        _sectionLabel("Service OTP"),
+                        _otpCard(),
+                      ],
                       if (_tracking) ...[
                         const SizedBox(height: 20),
                         _sectionLabel("Live Tracking"),
@@ -737,6 +767,109 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         ]),
       );
     });
+  }
+
+  // ✅ NEW — Service OTP card. Big spaced-out digits, tap-to-copy, and a
+  // clear warning not to share it until the caretaker has actually arrived.
+  Widget _otpCard() {
+    final otp = _order["otp"].toString();
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            gradient: AppColors.gradient,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: AppColors.glowShadow,
+          ),
+          child: const Icon(Icons.password_rounded, color: Colors.white, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text("Service OTP",
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: _text)),
+            const SizedBox(height: 2),
+            Text("Share this only when your caretaker arrives",
+                style: TextStyle(fontSize: 11.5, color: _subText)),
+          ]),
+        ),
+        if (_otpVerified)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: _totalGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _totalGreen.withOpacity(0.25)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.check_circle_rounded, size: 12, color: _totalGreen),
+              const SizedBox(width: 4),
+              Text("Verified",
+                  style: TextStyle(fontSize: 10.5, color: _totalGreen, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+      ]),
+
+      const SizedBox(height: 18),
+
+      Center(
+        child: GestureDetector(
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: otp));
+            _snack("OTP copied!", AppColors.primary);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: AppColors.glowShadow,
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              ...otp.split("").map((d) => Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 36, height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white.withOpacity(0.3)),
+                ),
+                child: Text(d,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
+              )),
+              const SizedBox(width: 8),
+              const Icon(Icons.copy_rounded, color: Colors.white70, size: 18),
+            ]),
+          ),
+        ),
+      ),
+
+      const SizedBox(height: 14),
+
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: AppColors.warning.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.warning.withOpacity(0.18)),
+        ),
+        child: Row(children: [
+          Icon(Icons.info_outline_rounded, size: 14, color: AppColors.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Don't share this over a call or chat in advance. It confirms your caretaker has physically arrived.",
+              style: TextStyle(
+                  fontSize: 11.5, height: 1.4,
+                  color: AppColors.warning, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ]),
+      ),
+    ]));
   }
 
   // ── Live Tracking Card ────────────────────────────────────────────────────────

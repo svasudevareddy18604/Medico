@@ -4,13 +4,13 @@ const db      = require("../config/db");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
 /* GET /caretaker/order-detail/:id */
-/* GET /caretaker/order-detail/:id */
 router.get("/order-detail/:id", async (req, res) => {
   try {
     const [[order]] = await db.query(`
       SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.payment_id, o.status, o.caretaker_id, o.assigned_caretaker_id,
+             o.otp, o.otp_verified, o.otp_used_at, o.otp_created_at, o.otp_expired,
              u.first_name AS careseeker_name, u.mobile AS careseeker_phone,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services,
              GROUP_CONCAT(DISTINCT bd.file_url     ORDER BY bd.uploaded_at SEPARATOR '|||') AS document_urls,
@@ -35,6 +35,7 @@ router.get("/order-detail/:id", async (req, res) => {
       GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
                o.payment_id, o.status, o.caretaker_id, o.assigned_caretaker_id,
+               o.otp, o.otp_verified, o.otp_used_at, o.otp_created_at, o.otp_expired,
                u.first_name, u.mobile
     `, [req.params.id]);
 
@@ -150,7 +151,7 @@ router.post("/mark-payment-received", async (req, res) => {
                        return res.json({ success: false, message: "Unauthorized" });
 
     await db.query(
-      "UPDATE orders SET payment_status='PAID', status='IN_PROGRESS' WHERE id=?", [order_id]);
+      "UPDATE orders SET payment_status='PAID' WHERE id=?", [order_id]);
 
     const [[ord]] = await db.query(`
       SELECT o.order_code, o.category, u.fcm_token
@@ -168,7 +169,9 @@ router.post("/mark-payment-received", async (req, res) => {
   }
 });
 
-/* POST /caretaker/start */
+/* POST /caretaker/start
+   Moves the booking to ON_THE_WAY. No OTP check here — OTP is only
+   verified once the caretaker has actually reached the customer. */
 router.post("/start", async (req, res) => {
   try {
     const { order_id, caretaker_id } = req.body;
@@ -176,14 +179,13 @@ router.post("/start", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing order_id or caretaker_id" });
 
     const [result] = await db.query(`
-      UPDATE orders SET status='IN_PROGRESS'
+      UPDATE orders SET status='ON_THE_WAY'
       WHERE id=? AND caretaker_id=?
         AND status IN ('ACCEPTED','CONFIRMED')
-        AND payment_status='PAID'
     `, [order_id, caretaker_id]);
 
     if (result.affectedRows === 0)
-      return res.json({ success: false, message: "Not found, not accepted, or payment not completed" });
+      return res.json({ success: false, message: "Not found or not accepted by you" });
 
     const [[order]] = await db.query(`
       SELECT o.order_code, o.category, u.fcm_token
@@ -191,17 +193,72 @@ router.post("/start", async (req, res) => {
     `, [order_id]);
 
     if (order?.fcm_token)
-      sendPushNotification(order.fcm_token, "Service Started 🚀",
-        `Your ${order.category} service (${order.order_code}) has started.`);
+      sendPushNotification(order.fcm_token, "Caretaker On The Way 🚗",
+        `Your caretaker is heading to you for the ${order.category} service (${order.order_code}). Share the OTP only once they arrive.`);
 
-    res.json({ success: true, message: "Service started" });
+    res.json({ success: true, message: "Journey started" });
   } catch (err) {
     console.error("START ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/* POST /caretaker/complete */
+/* POST /caretaker/verify-otp
+   Caretaker enters the 4-digit OTP shown to the careseeker. This is the
+   proof-of-arrival gate: only after this succeeds is the service treated
+   as actually started, and only then does Complete Service unlock. */
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { order_id, caretaker_id, otp } = req.body;
+    if (!order_id || !caretaker_id || !otp)
+      return res.status(400).json({ success: false, message: "Missing order_id, caretaker_id or otp" });
+
+    const [[order]] = await db.query(
+      `SELECT otp, otp_verified, otp_expired, caretaker_id, status
+       FROM orders WHERE id = ?`,
+      [order_id]
+    );
+
+    if (!order) return res.json({ success: false, message: "Order not found" });
+
+    if (Number(order.caretaker_id) !== Number(caretaker_id))
+      return res.json({ success: false, message: "Unauthorized" });
+
+    if (!["ACCEPTED", "CONFIRMED", "ON_THE_WAY"].includes(order.status))
+      return res.json({ success: false, message: `Cannot verify OTP — order is ${order.status}` });
+
+    if (Number(order.otp_expired) === 1)
+      return res.json({ success: false, message: "OTP expired" });
+
+    if (Number(order.otp_verified) === 1)
+      return res.json({ success: true, message: "OTP already verified" });
+
+    if (String(order.otp).trim() !== String(otp).trim())
+      return res.json({ success: false, message: "Invalid OTP" });
+
+    await db.query(
+      `UPDATE orders SET otp_verified = 1, otp_used_at = NOW() WHERE id = ?`,
+      [order_id]
+    );
+
+    const [[ord]] = await db.query(`
+      SELECT o.order_code, o.category, u.fcm_token
+      FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = ?
+    `, [order_id]);
+
+    if (ord?.fcm_token)
+      sendPushNotification(ord.fcm_token, "Caretaker Arrived ✅",
+        `Your caretaker has verified the OTP and started your ${ord.category} service (${ord.order_code}).`);
+
+    res.json({ success: true, message: "OTP verified successfully" });
+  } catch (err) {
+    console.error("VERIFY OTP ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* POST /caretaker/complete
+   Requires: payment collected AND arrival OTP verified. */
 router.post("/complete", async (req, res) => {
   const connection = await db.getConnection();
   try {
@@ -226,7 +283,7 @@ router.post("/complete", async (req, res) => {
       await connection.commit();
       return res.json({ success: true, message: "Already completed" });
     }
-    if (!["ACCEPTED", "CONFIRMED", "IN_PROGRESS"].includes(order.status)) {
+    if (!["ACCEPTED", "CONFIRMED", "ON_THE_WAY"].includes(order.status)) {
       await connection.rollback();
       return res.json({ success: false, message: `Cannot complete — order is ${order.status}` });
     }
@@ -234,13 +291,17 @@ router.post("/complete", async (req, res) => {
       await connection.rollback();
       return res.json({ success: false, message: "Unauthorized" });
     }
+    if (Number(order.otp_verified) !== 1) {
+      await connection.rollback();
+      return res.json({ success: false, message: "Arrival OTP not verified — cannot complete service" });
+    }
 
     const [[existing]] = await connection.query(
       "SELECT id FROM earnings WHERE order_id=? AND caretaker_id=?", [order_id, caretaker_id]);
 
     if (existing) {
       await connection.query(
-        "UPDATE orders SET status='COMPLETED', completed_at=NOW() WHERE id=?", [order_id]);
+        "UPDATE orders SET status='COMPLETED', completed_at=NOW(), otp_expired=1 WHERE id=?", [order_id]);
       await connection.commit();
       return res.json({ success: true, message: "Completed" });
     }
@@ -250,7 +311,7 @@ router.post("/complete", async (req, res) => {
     const caretakerAmount = parseFloat((total - commission).toFixed(2));
 
     await connection.query(
-      "UPDATE orders SET status='COMPLETED', completed_at=NOW() WHERE id=?", [order_id]);
+      "UPDATE orders SET status='COMPLETED', completed_at=NOW(), otp_expired=1 WHERE id=?", [order_id]);
     await connection.query(`
       INSERT INTO earnings (order_id, caretaker_id, total_amount, commission, caretaker_amount, status)
       VALUES (?,?,?,?,?,'pending')
@@ -283,13 +344,15 @@ router.get("/my-jobs/:caretakerId", async (req, res) => {
     const [jobs] = await db.query(`
       SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method,
+             o.otp_verified,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.caretaker_id=? AND o.status != 'CANCELLED'
       GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
-               o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method
+               o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method,
+               o.otp_verified
       ORDER BY o.created_at DESC
     `, [req.params.caretakerId]);
 
