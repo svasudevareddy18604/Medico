@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:screen_protector/screen_protector.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
@@ -38,6 +39,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   // NOTE: protection still runs silently in the background — we simply no
   // longer surface any UI copy about it to the user.
   bool _screenshotBlocked = false;
+
+  // Whether feedback has already been submitted for this order — checked
+  // locally (SharedPreferences) as a fallback in case the backend order
+  // payload doesn't yet return a feedback flag.
+  bool _feedbackGiven = false;
 
   late AnimationController _anim;
   late Animation<double>   _fade;
@@ -98,6 +104,22 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     if (v == null) return false;
     if (v is bool) return v;
     return v.toString().trim().toLowerCase() == "true" || v.toString() == "1";
+  }
+
+  // ── Feedback-already-given check ──────────────────────────────────────────────
+  // Prefers a backend-provided flag (feedback_given / has_feedback / rating)
+  // if present, and falls back to a locally persisted flag (SharedPreferences)
+  // set the moment feedback is successfully submitted from this device.
+  bool get _feedbackAlreadyGiven {
+    final v = _order["feedback_given"] ??
+        _order["has_feedback"] ??
+        _order["rating"];
+    if (v == null) return _feedbackGiven;
+    if (v is bool) return v;
+    if (v is num) return v > 0;
+    final s = v.toString().trim().toLowerCase();
+    if (s.isEmpty || s == "0" || s == "null") return _feedbackGiven;
+    return s == "true" || s == "1" || double.tryParse(s) != null && double.parse(s) > 0;
   }
 
   double? get _cLat => double.tryParse(_order["caretaker_latitude"]?.toString()  ?? "");
@@ -186,6 +208,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     _fade = CurvedAnimation(parent: _anim, curve: Curves.easeOut);
     themeNotifier.addListener(_rb);
     _refresh();
+    _loadFeedbackFlag();
     _timer = Timer.periodic(const Duration(seconds: 3), (_) => _refresh(silent: true));
   }
 
@@ -201,6 +224,16 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
   }
 
   void _rb() { if (mounted) setState(() {}); }
+
+  // ── Local "already submitted" flag (SharedPreferences fallback) ───────────────
+  String get _feedbackPrefsKey =>
+      "feedback_given_${widget.orders.first["id"]}";
+
+  Future<void> _loadFeedbackFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    final given = prefs.getBool(_feedbackPrefsKey) ?? false;
+    if (mounted) setState(() => _feedbackGiven = given);
+  }
 
   // ── Screenshot / screen-recording protection ─────────────────────────────────
   // Enabled the instant the booking moves to ACCEPTED (and stays enabled
@@ -219,7 +252,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
       }
     } catch (e) {
       debugPrint("SCREENSHOT PROTECTION ERROR: $e");
-      debugPrint("ORDER PAYLOAD: ${jsonEncode(_live)}");
     }
   }
 
@@ -246,10 +278,15 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
 
   Future<void> _refresh({bool silent = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
+    final url = "${Api.baseUrl}/orders/detail/${widget.orders.first["id"]}";
     try {
-      final res = await http
-          .get(Uri.parse("${Api.baseUrl}/orders/detail/${widget.orders.first["id"]}"))
-          .timeout(const Duration(seconds: 10));
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+
+      // TEMP DEBUG — remove once the endpoint is confirmed working.
+      debugPrint("ORDER DETAIL REQUEST: $url");
+      debugPrint("ORDER DETAIL STATUS: ${res.statusCode}");
+      debugPrint("ORDER DETAIL BODY: ${res.body}");
+
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (data["order"] != null && mounted) {
@@ -265,7 +302,9 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
           if (!silent) _anim.forward(from: 0);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("ORDER DETAIL FETCH ERROR: $e");
+    }
     if (!silent && mounted) setState(() => _loading = false);
   }
 
@@ -343,7 +382,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
                         _blockedCancelNote(),
                       if (_completed && _order["caretaker_id"] != null) ...[
                         const SizedBox(height: 10),
-                        _feedbackBtn(),
+                        _feedbackAlreadyGiven ? _feedbackGivenBadge() : _feedbackBtn(),
                       ],
                     ]),
                   ),
@@ -1453,18 +1492,57 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         minimumSize: const Size(double.infinity, 54),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
-      onPressed: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => CareSeekerFeedbackScreen(
-            caregiverId:    _order["caretaker_id"]    ?? 0,
-            orderId:        _order["id"]               ?? 0,
-            caregiverName:  _order["caregiver_name"]  ?? "",
-            caregiverPhone: _order["caregiver_phone"] ?? "",
+      onPressed: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CareSeekerFeedbackScreen(
+              caregiverId:    _order["caretaker_id"]    ?? 0,
+              orderId:        _order["id"]               ?? 0,
+              orderCode:      _order["order_code"]?.toString() ?? "",
+              caregiverName:  _order["caregiver_name"]  ?? "",
+              caregiverPhone: _order["caregiver_phone"] ?? "",
+            ),
           ),
-        ),
-      ),
+        );
+        // In case this screen is still on the stack when the user returns
+        // (e.g. they backed out before the success redirect completed),
+        // re-check the locally persisted flag so the button state stays correct.
+        _loadFeedbackFlag();
+      },
     ),
+  );
+
+  // ── Shown once feedback has already been submitted for this booking ──────────
+  Widget _feedbackGivenBadge() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+    decoration: BoxDecoration(
+      color: _totalGreen.withOpacity(_dark ? 0.10 : 0.07),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: _totalGreen.withOpacity(0.22)),
+    ),
+    child: Row(children: [
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _totalGreen.withOpacity(0.14),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(Icons.check_circle_rounded, color: _totalGreen, size: 20),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text("Feedback Submitted",
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w800, color: _totalGreen)),
+          const SizedBox(height: 3),
+          Text("Thanks for rating this service.",
+              style: TextStyle(fontSize: 12, color: _subText)),
+        ]),
+      ),
+    ]),
   );
 
   // ── Cancel Sheet ──────────────────────────────────────────────────────────────

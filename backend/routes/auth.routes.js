@@ -136,6 +136,26 @@ router.post("/login", async (req, res, next) => {
   }
 }, auth.login);
 
+/* =========================
+   UPDATE FCM TOKEN
+========================= */
+router.post("/update-fcm-token", async (req, res, next) => {
+  try {
+    const { user_id, fcm_token } = req.body;
+
+    if (!user_id || !fcm_token) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id and fcm_token required"
+      });
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+}, auth.updateFcmToken);
+
 
 /* =========================
    GET USER PROFILE

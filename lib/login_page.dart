@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'config/api.dart';
+import 'services/fcm_sync.dart'; // ← ADDED: shared FCM sync helper
 import 'screens/care_seeker/care_seeker_home.dart';
 import 'screens/admin/admin_homepage.dart';
 import 'splash_screen.dart';
@@ -36,34 +36,6 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
     overlay.insert(entry);
-  }
-
-  // ── FCM BACKGROUND SEND ──────────────────────────────────────────────────
-  // Fire-and-forget: runs AFTER navigation, never blocks the login flow.
-  void _sendFcmTokenInBackground(int userId) {
-    Future(() async {
-      try {
-        final m = FirebaseMessaging.instance;
-        // requestPermission is safe here — user is already on their home screen
-        await m.requestPermission();
-        final token = await m.getToken();
-        if (token == null) return;
-
-        // Your existing FCM setup helper
-        await setupFCMWithUser(userId);
-
-        // Patch token to backend (fire-and-forget; backend also does this on login
-        // but token wasn't available then, so we send it now)
-        await http.post(
-          Uri.parse("${Api.baseUrl}/update-fcm-token"),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode({"user_id": userId, "fcm_token": token}),
-        );
-      } catch (e) {
-        // Silent fail — notifications not critical for login
-        debugPrint("FCM background update failed: $e");
-      }
-    });
   }
 
   // ── LOGIN ────────────────────────────────────────────────────────────────
@@ -108,8 +80,14 @@ class _LoginPageState extends State<LoginPage> {
       await prefs.setString("role", role);
       await prefs.setBool("is_logged_in", true);
 
-      // ✅ FIX: FCM runs in background — does NOT block navigation.
-      _sendFcmTokenInBackground(userId);
+      // ✅ FIX: FCM sync runs in background via shared helper — does NOT
+      // block navigation. Same function is also called from splash_screen.dart
+      // on every subsequent app open, so the token stays fresh even when
+      // this login screen never runs again for a returning user.
+      syncFcmToken(userId);
+
+      // Local notification / foreground-message setup (unrelated to token sync).
+      setupFCMWithUser(userId);
 
       showToast("Welcome back! Login successful", type: ToastType.success);
       if (!mounted) return;

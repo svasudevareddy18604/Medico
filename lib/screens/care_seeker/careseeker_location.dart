@@ -488,4 +488,4 @@ class _ToastWidgetState extends State<_ToastWidget> with SingleTickerProviderSta
 class _ToastStyle {
   final Color bg, accent; final IconData icon; final String label;
   const _ToastStyle(this.bg, this.accent, this.icon, this.label);
-}
+}   

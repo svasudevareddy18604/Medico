@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'config/api.dart';
 import 'login_page.dart';
+import 'services/fcm_sync.dart'; // ← ADDED
 import 'screens/admin/admin_homepage.dart';
 import 'screens/care_seeker/care_seeker_home.dart';
 import 'screens/care_taker/care_taker_home.dart';
@@ -64,6 +65,15 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final role     = p.getString("role") ?? "";
     if (!mounted) return;
     if (!loggedIn)          { _go(const LoginPage()); return; }
+
+    // ── FCM SYNC ──────────────────────────────────────────────────────────
+    // Fires for EVERY app open where the user is already logged in (the
+    // vast majority of opens). This is what was missing before — token was
+    // only ever sent from login_page.dart, which never runs again once the
+    // session is restored from SharedPreferences. Fire-and-forget: does not
+    // block navigation, no await.
+    syncFcmToken(userId);
+
     if (role == "admin")    { _go(AdminHomePage(userId: userId)); return; }
     if (role == "care_seeker") { _go(CareSeekerHome(userId: userId)); return; }
     if (role == "care_taker") {
