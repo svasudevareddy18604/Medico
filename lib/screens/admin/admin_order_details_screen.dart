@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // ✅ NEW — for Clipboard (copy OTP)
 import 'package:http/http.dart' as http;
 import 'package:medico/config/api.dart';
 import 'package:medico/utils/app_colors.dart';
-import 'package:medico/screens/admin/document_viewer_screen.dart'; // ✅ NEW
+import 'package:medico/screens/admin/document_viewer_screen.dart';
 
 class AdminOrderDetailsScreen extends StatefulWidget {
   final Map order;
@@ -17,17 +18,25 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   late Map o;
   bool _loadingCaretakers = false;
   bool _loadingRefund     = false;
-  bool _loadingDocuments  = false; // ✅ NEW
+  bool _loadingDocuments  = false;
   List _caretakers        = [];
-  List _documents         = [];   // ✅ NEW
+  List _documents         = [];
   Map? _refundRequest;
+
+  // ✅ NEW — Admin-only OTP state
+  bool _loadingOtp   = false;
+  String? _otp;
+  bool _otpVerified  = false;
+  String? _otpVerifiedAt;
+  bool _otpVisible   = false; // masked by default, admin taps to reveal
 
   @override
   void initState() {
     super.initState();
     o = Map.from(widget.order);
     _fetchRefundRequest();
-    _fetchDocuments(); // ✅ NEW
+    _fetchDocuments();
+    _fetchOtp(); // ✅ NEW
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -64,7 +73,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   String get _cancelledCaretakerMobile =>
       o['cancelled_caretaker_mobile']?.toString() ?? "";
 
-  // ✅ NEW — turns "id_proof_front" into "Id Proof Front"
+  // turns "id_proof_front" into "Id Proof Front"
   String _prettyDocKey(String key) {
     if (key.isEmpty) return "Document";
     return key
@@ -74,7 +83,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
         .join(' ');
   }
 
-  // ✅ NEW — turns an ISO timestamp into "11 Jul 2026 · 6:45 PM"
+  // turns an ISO timestamp into "11 Jul 2026 · 6:45 PM"
   String _formatDateTime(String? raw) {
     if (raw == null || raw.isEmpty) return "-";
     try {
@@ -171,7 +180,6 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   Future<void> _fetchAvailableCaretakers() async {
     setState(() { _loadingCaretakers = true; _caretakers = []; });
     try {
-      // ✅ Uses new slot-aware endpoint
       final res = await http.get(Uri.parse(
           "${Api.baseUrl}/admin/orders/available-caretakers/${o['id']}"));
       if (res.statusCode == 200) {
@@ -187,7 +195,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     }
   }
 
-  // ✅ NEW — Fetch documents uploaded by the careseeker for this order
+  // Fetch documents uploaded by the careseeker for this order
   Future<void> _fetchDocuments() async {
     setState(() => _loadingDocuments = true);
     try {
@@ -202,6 +210,35 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     } finally {
       if (mounted) setState(() => _loadingDocuments = false);
     }
+  }
+
+  // ✅ NEW — Fetch the Service OTP for this order (admin-only view).
+  // Works regardless of order status/time — admin can check it anytime.
+  Future<void> _fetchOtp() async {
+    setState(() => _loadingOtp = true);
+    try {
+      final res = await http.get(
+          Uri.parse("${Api.baseUrl}/admin/orders/${o['id']}/otp"));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final data = decoded['data'] ?? {};
+        setState(() {
+          _otp           = data['otp']?.toString();
+          _otpVerified   = (data['otp_verified'] == 1 || data['otp_verified'] == true);
+          _otpVerifiedAt = data['otp_verified_at']?.toString();
+        });
+      }
+    } catch (_) {
+      // Non-critical — OTP card will just show "Unavailable".
+    } finally {
+      if (mounted) setState(() => _loadingOtp = false);
+    }
+  }
+
+  void _copyOtp() {
+    if (_otp == null || _otp!.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: _otp!));
+    _snack("OTP copied to clipboard", AppColors.primary);
   }
 
   // ── Assign caretaker ──────────────────────────────────────────────────────
@@ -394,7 +431,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
             ]),
           ),
 
-          // ✅ If caretaker cancelled — show who cancelled
+          // If caretaker cancelled — show who cancelled
           if (_wasCancelledByCaretaker && _cancelledCaretakerName.isNotEmpty)
             Container(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -642,7 +679,106 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     ]);
   }
 
-  // ✅ NEW — Uploaded Documents section: neat 2-column grid, tap → full-screen viewer
+  // ✅ NEW — Admin-only Service OTP section.
+  // Visible at any point in the order lifecycle, independent of status.
+  Widget _buildOtpSection() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _section("Service OTP (Admin Only)", Icons.lock_clock_rounded, Colors.deepPurple),
+      _loadingOtp
+          ? _card(const Center(child: Padding(
+              padding: EdgeInsets.all(12),
+              child: CircularProgressIndicator())))
+          : _card(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text("Generated OTP", style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: _otpVerified
+                        ? const Color(0xFFE8F8F4)
+                        : const Color(0xFFFFF3E0),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                      _otpVerified ? Icons.verified_rounded : Icons.hourglass_empty_rounded,
+                      color: _otpVerified ? const Color(0xFF1B7F6E) : Colors.orange,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _otpVerified ? "VERIFIED" : "NOT VERIFIED",
+                      style: TextStyle(
+                        color: _otpVerified ? const Color(0xFF1B7F6E) : Colors.orange,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ]),
+                ),
+              ]),
+              const SizedBox(height: 14),
+              if (_otp == null || _otp!.isEmpty)
+                Row(children: [
+                  Icon(Icons.info_outline_rounded, color: Colors.grey[400], size: 18),
+                  const SizedBox(width: 8),
+                  Text("OTP not generated for this order",
+                      style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                ])
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F3FF),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFDDD6FE)),
+                  ),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(
+                        _otpVisible ? _otp! : "• • • •",
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 6,
+                          color: Color(0xFF5B21B6),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        _otpVisible ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                        color: const Color(0xFF5B21B6),
+                      ),
+                      tooltip: _otpVisible ? "Hide OTP" : "Reveal OTP",
+                      onPressed: () => setState(() => _otpVisible = !_otpVisible),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy_rounded, color: Color(0xFF5B21B6)),
+                      tooltip: "Copy OTP",
+                      onPressed: _copyOtp,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.refresh_rounded, color: Color(0xFF5B21B6)),
+                      tooltip: "Refresh",
+                      onPressed: _fetchOtp,
+                    ),
+                  ]),
+                ),
+              if (_otpVerified && _otpVerifiedAt != null) ...[
+                const SizedBox(height: 10),
+                _row("Verified At", _formatDateTime(_otpVerifiedAt)),
+              ],
+              const SizedBox(height: 6),
+              Text(
+                "This code is shared with the careseeker and verified on-site by the caretaker. Visible to admin only.",
+                style: TextStyle(color: Colors.grey[400], fontSize: 11),
+              ),
+            ])),
+    ]);
+  }
+
+  // Uploaded Documents section: neat 2-column grid, tap → full-screen viewer
   Widget _buildDocumentsSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _section("Uploaded Documents", Icons.folder_copy_rounded, Colors.indigo),
@@ -770,7 +906,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     ]);
   }
 
-  // ✅ NEW — Timeline as a proper connected vertical timeline
+  // Timeline as a proper connected vertical timeline
   Widget _buildTimelineSection() {
     final items = <Map<String, dynamic>>[
       {
@@ -943,7 +1079,10 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
               _row("Category", o['category'] ?? "-"),
             ])),
 
-            // ✅ Cancelled-by caretaker card
+            // ✅ NEW — Service OTP (admin-only, visible at any order stage)
+            _buildOtpSection(),
+
+            // Cancelled-by caretaker card
             if (_wasCancelledByCaretaker) ...[
               _section("Cancelled By", Icons.person_off_rounded, Colors.red),
               _card(Column(children: [
@@ -989,10 +1128,10 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
             // Refund
             _buildRefundSection(),
 
-            // ✅ Uploaded Documents (NEW)
+            // Uploaded Documents
             _buildDocumentsSection(),
 
-            // ✅ Timeline (redesigned as vertical timeline)
+            // Timeline
             _buildTimelineSection(),
 
             // Cancel reason (non-caretaker cancel)

@@ -149,218 +149,294 @@ class _CaretakerOtpScreenState extends State<CaretakerOtpScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.lightBg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Header ──────────────────────────────────────────
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 30),
-              decoration: BoxDecoration(
-                gradient: AppColors.gradient,
-                borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(28)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context, false),
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                            color: Colors.white24,
-                            borderRadius: BorderRadius.circular(10)),
-                        child: const Icon(Icons.arrow_back_ios_new_rounded,
-                            color: Colors.white, size: 18),
+      body: Column(
+        children: [
+
+          // ── Header ────────────────────────────────────────────
+          // Same structural language as the order-details header:
+          // back chip top-left, bold white title beside it, then a
+          // centered icon badge + booking code + helper line below.
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 52, 16, 26),
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient,
+              borderRadius:
+                  const BorderRadius.vertical(bottom: Radius.circular(26)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context, false),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.arrow_back_ios_new_rounded,
+                          color: Colors.white, size: 18),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Text(
+                      "Verify Arrival",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  if (widget.orderCode.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(20)),
+                      child: Text(
+                        widget.orderCode,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12),
                       ),
                     ),
-                    const SizedBox(width: 14),
-                    const Text("Verify Arrival",
+                ]),
+                const SizedBox(height: 22),
+                Center(
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 62,
+                        height: 62,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.18),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.4),
+                              width: 1.5),
+                        ),
+                        child: const Icon(Icons.shield_moon_rounded,
+                            color: Colors.white, size: 28),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        "Confirm Your Arrival",
                         style: TextStyle(
                             color: Colors.white,
-                            fontSize: 19,
-                            fontWeight: FontWeight.bold)),
-                  ]),
-                  const SizedBox(height: 18),
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.18),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.4), width: 1.5),
-                    ),
-                    child: const Icon(Icons.shield_moon_rounded,
-                        color: Colors.white, size: 30),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    widget.orderCode.isNotEmpty
-                        ? "Booking ${widget.orderCode}"
-                        : "Confirm your arrival",
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    "Ask the careseeker for the OTP shown on their\norder details screen and enter it below.",
-                    style: TextStyle(color: Colors.white70, fontSize: 12.5, height: 1.4),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 34),
-
-            // ── OTP boxes ───────────────────────────────────────
-            AnimatedBuilder(
-              animation: _shakeAnim,
-              builder: (context, child) {
-                final t = _shakeAnim.value;
-                final dx = (t == 0)
-                    ? 0.0
-                    : (8 * (1 - t)) * (((t * 10).floor() % 2 == 0) ? 1 : -1);
-                return Transform.translate(offset: Offset(dx, 0), child: child);
-              },
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(_otpLength, (i) => _otpBox(i)),
-              ),
-            ),
-
-            const SizedBox(height: 14),
-
-            if (_errorText != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 30),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error_outline_rounded,
-                        color: Color(0xFFEF4444), size: 16),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(_errorText!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              color: Color(0xFFEF4444),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600)),
-                    ),
-                  ],
-                ),
-              )
-            else if (_verified)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.check_circle_rounded,
-                      color: AppColors.primary, size: 16),
-                  SizedBox(width: 6),
-                  Text("OTP Verified · Service Started",
-                      style: TextStyle(
-                          color: AppColors.primary,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700)),
-                ],
-              ),
-
-            const Spacer(),
-
-            // ── Verify button ───────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-              child: Column(children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF59E0B).withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                        color: const Color(0xFFF59E0B).withOpacity(0.3)),
-                  ),
-                  child: const Row(children: [
-                    Icon(Icons.info_outline_rounded,
-                        color: Color(0xFFF59E0B), size: 18),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        "Only enter this OTP once you have physically reached the customer's location.",
-                        style: TextStyle(
-                            color: Color(0xFF7B5800),
-                            fontSize: 12,
-                            height: 1.3),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700),
                       ),
-                    ),
-                  ]),
-                ),
-                GestureDetector(
-                  onTap: (_verifying || _verified) ? null : _verify,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: double.infinity,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: _verified
-                          ? AppColors.primary
-                          : (_otp.length == _otpLength
-                              ? AppColors.primary
-                              : Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: (_otp.length == _otpLength && !_verifying)
-                          ? [
-                              BoxShadow(
-                                  color: AppColors.primary.withOpacity(0.35),
-                                  blurRadius: 14,
-                                  offset: const Offset(0, 6))
-                            ]
-                          : [],
-                    ),
-                    child: Center(
-                      child: _verifying
-                          ? const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                  color: Colors.white, strokeWidth: 2.4))
-                          : Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                    _verified
-                                        ? Icons.check_rounded
-                                        : Icons.verified_user_rounded,
-                                    color: _otp.length == _otpLength || _verified
-                                        ? Colors.white
-                                        : Colors.grey,
-                                    size: 20),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _verified ? "Verified" : "Verify OTP",
-                                  style: TextStyle(
-                                      color: _otp.length == _otpLength || _verified
-                                          ? Colors.white
-                                          : Colors.grey,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15),
-                                ),
-                              ],
-                            ),
-                    ),
+                      const SizedBox(height: 6),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 20),
+                        child: Text(
+                          "Ask the careseeker for the OTP shown on their order details screen.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12.5,
+                              height: 1.4),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ]),
+              ],
             ),
-          ],
-        ),
+          ),
+
+          // ── Body ────────────────────────────────────────────────
+          Expanded(
+            child: SafeArea(
+              top: false,
+              child: Column(
+                children: [
+                  const SizedBox(height: 30),
+
+                  // "Enter 4-Digit OTP" label
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.pin_rounded,
+                          color: AppColors.primary.withOpacity(0.85), size: 18),
+                      const SizedBox(width: 6),
+                      Text(
+                        "Enter 4-Digit OTP",
+                        style: TextStyle(
+                            color: Colors.grey.shade800,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // ── OTP boxes ───────────────────────────────────
+                  AnimatedBuilder(
+                    animation: _shakeAnim,
+                    builder: (context, child) {
+                      final t = _shakeAnim.value;
+                      final dx = (t == 0)
+                          ? 0.0
+                          : (8 * (1 - t)) *
+                              (((t * 10).floor() % 2 == 0) ? 1 : -1);
+                      return Transform.translate(
+                          offset: Offset(dx, 0), child: child);
+                    },
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children:
+                          List.generate(_otpLength, (i) => _otpBox(i)),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  if (_errorText != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 30),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.error_outline_rounded,
+                              color: Color(0xFFEF4444), size: 16),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(_errorText!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: Color(0xFFEF4444),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (_verified)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.check_circle_rounded,
+                            color: AppColors.primary, size: 16),
+                        SizedBox(width: 6),
+                        Text("OTP Verified · Service Started",
+                            style: TextStyle(
+                                color: AppColors.primary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+
+                  const Spacer(),
+
+                  // ── Verify button ───────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                    child: Column(children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B).withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                              color:
+                                  const Color(0xFFF59E0B).withOpacity(0.3)),
+                        ),
+                        child: const Row(children: [
+                          Icon(Icons.info_outline_rounded,
+                              color: Color(0xFFF59E0B), size: 18),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "Only enter this OTP once you have physically reached the customer's location.",
+                              style: TextStyle(
+                                  color: Color(0xFF7B5800),
+                                  fontSize: 12,
+                                  height: 1.3),
+                            ),
+                          ),
+                        ]),
+                      ),
+                      GestureDetector(
+                        onTap: (_verifying || _verified) ? null : _verify,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: double.infinity,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            color: _verified
+                                ? AppColors.primary
+                                : (_otp.length == _otpLength
+                                    ? AppColors.primary
+                                    : Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow:
+                                (_otp.length == _otpLength && !_verifying)
+                                    ? [
+                                        BoxShadow(
+                                            color: AppColors.primary
+                                                .withOpacity(0.35),
+                                            blurRadius: 14,
+                                            offset: const Offset(0, 6))
+                                      ]
+                                    : [],
+                          ),
+                          child: Center(
+                            child: _verifying
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.4))
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                          _verified
+                                              ? Icons.check_rounded
+                                              : Icons
+                                                  .verified_user_rounded,
+                                          color: _otp.length == _otpLength ||
+                                                  _verified
+                                              ? Colors.white
+                                              : Colors.grey,
+                                          size: 20),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        _verified
+                                            ? "Verified"
+                                            : "Verify OTP",
+                                        style: TextStyle(
+                                            color: _otp.length ==
+                                                        _otpLength ||
+                                                    _verified
+                                                ? Colors.white
+                                                : Colors.grey,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 15),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -18,7 +18,7 @@ const generateOrderCode = () => {
   return code;
 };
 
-// ✅ NEW — 4-digit Service OTP, shown to the careseeker and later verified
+// 4-digit Service OTP, shown to the careseeker and later verified
 // by the caretaker on-site (Phase 1: generate + display only).
 const generateOtp = () => {
   // Math.floor(1000 + rand*9000) always yields a 4-digit number (1000-9999),
@@ -118,6 +118,50 @@ router.get("/detail/:id", async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false });
+  }
+});
+
+/* =====================================================
+   ✅ NEW — GET /orders/:orderId/otp
+   Admin-only view of the Service OTP for a single order.
+   Returns the OTP regardless of order status/time, so admin
+   can look it up at any point in the order's lifecycle.
+
+   NOTE: Mount this route behind your admin auth middleware
+   (e.g. requireAdmin) at the app-level / router-level so
+   only authenticated admins can hit it — this handler itself
+   does not check the caller's role.
+===================================================== */
+
+router.get("/:orderId/otp", async (req, res) => {
+  try {
+    const [[order]] = await db.query(
+      `SELECT id, order_code, otp, otp_verified,
+              otp_created_at, otp_verified_at, otp_used_at, otp_expired
+       FROM orders
+       WHERE id = ?`,
+      [req.params.orderId]
+    );
+
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found" });
+
+    return res.json({
+      success: true,
+      data: {
+        order_id:        order.id,
+        order_code:      order.order_code,
+        otp:             order.otp,
+        otp_verified:    !!order.otp_verified,
+        otp_created_at:  order.otp_created_at,
+        otp_verified_at: order.otp_verified_at,
+        otp_used_at:     order.otp_used_at,
+        otp_expired:     !!order.otp_expired,
+      },
+    });
+  } catch (err) {
+    console.error("ADMIN OTP FETCH ERROR:", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch OTP" });
   }
 });
 
@@ -261,8 +305,8 @@ router.post("/place", async (req, res) => {
         }
       }
 
-      // ✅ NEW — one Service OTP per created order (each grouped order gets
-      // its own OTP, since a careseeker could have multiple caretakers).
+      // One Service OTP per created order (each grouped order gets its
+      // own OTP, since a careseeker could have multiple caretakers).
       const otp = generateOtp();
 
       const [orderRes] = await conn.query(
@@ -322,7 +366,7 @@ router.post("/place", async (req, res) => {
         discount:      groupDiscount,
         total,
         service_name:  serviceNamesForOrder,
-        otp,                    // ✅ NEW — returned so the app can show it immediately
+        otp,                    // returned so the app can show it immediately
       });
     }
 

@@ -526,9 +526,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
           Column(children: [
 
             // ── Header ──────────────────────────────────────────────
-            // Cleaned up: no more "Secure" chip / camera icon — they made
-            // the header feel cluttered. Screenshot protection still runs
-            // silently in the background regardless.
             Container(
               padding: const EdgeInsets.fromLTRB(16, 52, 16, 22),
               decoration: BoxDecoration(
@@ -548,8 +545,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                   ),
                 ),
                 const SizedBox(width: 14),
-                // Title + category — tap to copy the booking ID, with a
-                // small copy icon as an affordance hint.
                 Expanded(
                   child: GestureDetector(
                     onTap: _code.isNotEmpty ? _copyOrderCode : null,
@@ -582,8 +577,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                     ),
                   ),
                 ),
-                // Doc badge in header — hidden once completed, since
-                // documents are restricted at that point.
                 if (_hasDocs && !_isCompleted)
                   AnimatedBuilder(
                     animation: _docGlow,
@@ -771,7 +764,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                     _row("Date",       date),
                     if (slot != "—")
                       _row("Time Slot", slot),
-                    // Location hidden when COMPLETED
                     if (!_isCompleted)
                       _row("Location", location),
                     _row("Amount",     "₹$total"),
@@ -817,9 +809,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                   const SizedBox(height: 14),
 
                   // ── Medical documents ──────────────────────────────
-                  // Once the service is COMPLETED, documents are fully
-                  // locked — caretaker can no longer view/open them.
-                  // Before completion, behaves exactly as before.
                   if (_isCompleted) ...[
                     if (_hasDocs) _docsRestrictedBox(),
                     const SizedBox(height: 14),
@@ -852,7 +841,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Doc header bar
                             Container(
                               width: double.infinity,
                               padding: const EdgeInsets.symmetric(
@@ -897,7 +885,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                 ),
                               ]),
                             ),
-                            // Review reminder
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                               child: Container(
@@ -926,7 +913,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                               ),
                             ),
                             const SizedBox(height: 10),
-                            // Document tiles
                             Padding(
                               padding:
                                   const EdgeInsets.fromLTRB(12, 0, 12, 14),
@@ -1106,7 +1092,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                           : _goToPaymentScreen,
                     ),
                     const SizedBox(width: 10),
-                    // Call button — locked when COMPLETED
                     if (_isCompleted)
                       Expanded(
                         child: Container(
@@ -1176,13 +1161,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                           ),
                         )
                       : (!_notAccepted && (_isAccepted || _isConfirmed))
-    // Swipe-to-confirm slider, only for "Start Journey"
-    ? _SwipeToStartButton(
+                          ? _SwipeToStartButton(
                               color: _blue,
                               enabled: _ctaAction != null,
                               onConfirmed: () => _ctaAction?.call(),
                             )
-                          // All other CTA states keep the tap button
                           : GestureDetector(
                               onTap: _ctaAction,
                               child: AnimatedContainer(
@@ -1235,20 +1218,17 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
           ]),
 
           // ── Screenshot watermark overlay (active during service) ──
-          // This is a secondary visual deterrent — blurs the whole UI
-          // if somehow screenshot is triggered (works even without FLAG_SECURE)
           if (_screenshotBlocked)
-            IgnorePointer(
-              child: Positioned.fill(
-                child: Container(color: Colors.transparent),
-                // The actual FLAG_SECURE is set via platform channel
-                // This widget serves as the Dart-side marker
-              ),
-            ),
+  Positioned.fill(
+    child: IgnorePointer(
+      child: Container(color: Colors.transparent),
+    ),
+  ),
         ],
       ),
     );
   }
+
   // ── Location Restricted Box (themed) ───────────────────────────
   Widget _locationRestrictedBox({
     required String label,
@@ -1266,7 +1246,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         clipBehavior: Clip.antiAlias,
         child: Stack(
           children: [
-            // Themed gradient background using AppColors
             Container(
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
@@ -1276,15 +1255,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                 ),
               ),
             ),
-            // Grid pattern overlay
             Positioned.fill(
               child: CustomPaint(painter: _GridPainter()),
             ),
-            // Diagonal stripe overlay for extra "restricted" feel
             Positioned.fill(
               child: CustomPaint(painter: _DiagonalStripePainter()),
             ),
-            // Content
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1388,8 +1364,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       );
 
   // ── Medical Documents Restricted Box (themed) ──────────────────
-  // Shown instead of the document tiles once the service is COMPLETED.
-  // Caretaker can no longer open/view patient medical documents.
   Widget _docsRestrictedBox() => Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -1436,82 +1410,137 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         ]),
       );
 
-  // ── Status Stepper ───────────────────────────────────────────
-  // Connector lines fill based on the earlier of each adjacent pair of
-  // steps being done, so the line between "Payment" and "Completed"
-  // doesn't visually disconnect right after payment goes through but
-  // before the booking is marked complete.
+  // ── Status Stepper (redesigned) ────────────────────────────────
+  // 5 steps: Accepted → On The Way → Verified → Payment → Completed.
+  // Redesign goals vs. the old version:
+  //  • Smaller, tighter dots (30px) with icons instead of bare check
+  //    marks, so nothing overlaps/cramps on narrow phone widths.
+  //  • Connector line is a single continuous strip built with
+  //    dot/line/dot/line/dot instead of duplicated per-item lines,
+  //    so segments always align perfectly and never double up.
+  //  • The current in-progress step gets a distinct glowing ring
+  //    (blue) so it's obvious where you are, not just "done vs not".
+  //  • Labels sit in their own row below with a fixed 2-line height,
+  //    small caps-ish weight change, so "On The Way" never collides
+  //    with the neighbouring step's label.
   Widget _statusStepper() {
-    final steps = [
-      {"label": "Accepted",   "done": !_notAccepted},
-      {"label": "On The Way", "done": _onTheWay || _isCompleted},
-      {"label": "Verified",   "done": _otpVerified || _isCompleted},
-      {"label": "Payment",    "done": _isPaid},
-      {"label": "Completed",  "done": _isCompleted},
+    final steps = <_StepInfo>[
+      _StepInfo("Accepted",   Icons.handshake_rounded,      !_notAccepted),
+      _StepInfo("On The Way", Icons.directions_run_rounded, _onTheWay || _isCompleted),
+      _StepInfo("Verified",   Icons.verified_user_rounded,  _otpVerified || _isCompleted),
+      _StepInfo("Payment",    Icons.payment_rounded,        _isPaid),
+      _StepInfo("Completed",  Icons.done_all_rounded,       _isCompleted),
     ];
+
+    // Index of the first not-yet-done step = the "current" step.
+    // If everything is done, there is no current step (-1).
+    int current = steps.indexWhere((s) => !s.done);
+
     return _card(
-      child: Row(
-        children: List.generate(steps.length, (i) {
-          final done = steps[i]["done"] as bool;
-          final dot  = Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-                color: done ? AppColors.primary : Colors.transparent,
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: done ? AppColors.primary : Colors.grey.shade300,
-                    width: 2)),
-            child: Icon(
-              done ? Icons.check_rounded : Icons.radio_button_unchecked,
-              color: done ? Colors.white : Colors.grey.shade400,
-              size: 16,
-            ),
-          );
-
-          // A connector segment after step `i` is filled when step `i`
-          // itself is done, OR when the following step is already done
-          // (covers cases where statuses jump, e.g. payment + completion
-          // landing in the same fetch).
-          bool segmentFilled() {
-            final nextDone = (i + 1 < steps.length)
-                ? steps[i + 1]["done"] as bool
-                : false;
-            return done || nextDone;
-          }
-
-          Widget line({required bool filled}) => Expanded(
-                child: Container(
-                  height: 3,
-                  decoration: BoxDecoration(
-                      color: filled
-                          ? AppColors.primary
-                          : Colors.grey.shade200,
-                      borderRadius: BorderRadius.circular(2)),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: List.generate(steps.length * 2 - 1, (idx) {
+              // Even indices are dots, odd indices are connector lines.
+              if (idx.isEven) {
+                final i = idx ~/ 2;
+                return _stepDot(
+                  icon: steps[i].icon,
+                  done: steps[i].done,
+                  isCurrent: i == current,
+                );
+              } else {
+                final leftDone = steps[idx ~/ 2].done;
+                return Expanded(
+                  child: Container(
+                    height: 3,
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      color: leftDone ? AppColors.primary : Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                );
+              }
+            }),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: List.generate(steps.length, (i) {
+              final done      = steps[i].done;
+              final isCurrent = i == current;
+              return Expanded(
+                child: Text(
+                  steps[i].label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    height: 1.15,
+                    fontWeight: (done || isCurrent)
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    color: done
+                        ? AppColors.primary
+                        : isCurrent
+                            ? _blue
+                            : Colors.grey.shade500,
+                  ),
                 ),
               );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
 
-          return Expanded(
-            child: Column(children: [
-              Row(children: [
-                if (i != 0)
-                  line(filled: steps[i - 1]["done"] as bool || done),
-                dot,
-                if (i != steps.length - 1) line(filled: segmentFilled()),
-              ]),
-              const SizedBox(height: 6),
-              Text(
-                steps[i]["label"] as String,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 10,
-                    fontWeight:
-                        done ? FontWeight.w700 : FontWeight.w500,
-                    color: done ? AppColors.primary : Colors.grey.shade500),
-              ),
-            ]),
-          );
-        }),
+  Widget _stepDot({
+    required IconData icon,
+    required bool done,
+    required bool isCurrent,
+  }) {
+    final ringColor = done
+        ? AppColors.primary
+        : isCurrent
+            ? _blue
+            : Colors.grey.shade300;
+
+    return Container(
+      width: 30,
+      height: 30,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: done
+            ? AppColors.primary
+            : isCurrent
+                ? _blue.withOpacity(0.12)
+                : Colors.white,
+        border: Border.all(
+          color: ringColor,
+          width: isCurrent && !done ? 2.4 : 2,
+        ),
+        boxShadow: isCurrent
+            ? [
+                BoxShadow(
+                  color: ringColor.withOpacity(0.35),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
+      ),
+      child: Icon(
+        done ? Icons.check_rounded : icon,
+        color: done
+            ? Colors.white
+            : isCurrent
+                ? _blue
+                : Colors.grey.shade400,
+        size: 15,
       ),
     );
   }
@@ -1566,9 +1595,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         if (!isLast) Divider(height: 1, color: Colors.grey.shade100),
       ]);
 
-  // Booking ID row — tap-to-copy with a subtle copy icon + visual
-  // feedback (ink ripple) so users know it's interactive. Triggers the
-  // same toast confirmation as the header copy action.
   Widget _copyableRow(String label, String value) => Material(
         color: Colors.transparent,
         child: InkWell(
@@ -1684,9 +1710,16 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       );
 }
 
+// Simple immutable holder for a single step in the status stepper.
+class _StepInfo {
+  final String label;
+  final IconData icon;
+  final bool done;
+  const _StepInfo(this.label, this.icon, this.done);
+}
+
 // ════════════════════════════════════════════════════════════════
-// Add this class anywhere below your OrderDetailsScreen file
-// (e.g. right above the `enum _ToastType` line).
+// Swipe-to-start button (unchanged)
 // ════════════════════════════════════════════════════════════════
 
 class _SwipeToStartButton extends StatefulWidget {
@@ -1767,7 +1800,6 @@ class _SwipeToStartButtonState extends State<_SwipeToStartButton>
     final maxDrag = _maxDrag(trackWidth);
     setState(() => _dragging = false);
 
-    // Threshold: 78% of the way across counts as a confirm
     if (_dragX >= maxDrag * 0.78) {
       _confirm(maxDrag);
     } else {
@@ -1837,7 +1869,6 @@ class _SwipeToStartButtonState extends State<_SwipeToStartButton>
           child: Stack(
             alignment: Alignment.centerLeft,
             children: [
-              // Filled progress track behind the knob
               AnimatedContainer(
                 duration: _dragging
                     ? Duration.zero
@@ -1850,8 +1881,6 @@ class _SwipeToStartButtonState extends State<_SwipeToStartButton>
                   color: Colors.white.withOpacity(0.16),
                 ),
               ),
-
-              // Shimmer text hint, fades out as user drags
               Positioned.fill(
                 child: Center(
                   child: Opacity(
@@ -1888,8 +1917,6 @@ class _SwipeToStartButtonState extends State<_SwipeToStartButton>
                   ),
                 ),
               ),
-
-              // Trailing chevrons hint (subtle, fades with progress)
               Positioned(
                 right: 18,
                 child: Opacity(
@@ -1906,8 +1933,6 @@ class _SwipeToStartButtonState extends State<_SwipeToStartButton>
                   ),
                 ),
               ),
-
-              // Draggable knob
               AnimatedContainer(
                 duration: _dragging
                     ? Duration.zero
