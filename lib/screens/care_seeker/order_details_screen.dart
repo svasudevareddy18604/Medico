@@ -6,2238 +6,2152 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:screen_protector/screen_protector.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
-import '../care_taker/caretaker_payment_screen.dart';
-import '../care_taker/caretaker_otp_screen.dart';
+import 'careseekerfeedback_screen.dart';
+import 'cancellationpolicy_screen.dart';
 
 class OrderDetailsScreen extends StatefulWidget {
-  final Map  order;
-  final int  userId;
-  const OrderDetailsScreen({super.key, required this.order, required this.userId});
+  final List<dynamic> orders;
+  const OrderDetailsScreen({super.key, required this.orders});
 
   @override
   State<OrderDetailsScreen> createState() => _OrderDetailsScreenState();
 }
 
 class _OrderDetailsScreenState extends State<OrderDetailsScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with SingleTickerProviderStateMixin {
 
-  // ── Palette (uses AppColors) ─────────────────────────────────
-  static const _amber   = Color(0xFFF59E0B);
-  static const _red     = Color(0xFFEF4444);
-  static const _blue    = Color(0xFF1565C0);
-  static const _orange  = Color(0xFFFF6B00);
-  static const _purple  = Color(0xFF7C3AED);
+  // ── State ─────────────────────────────────────────────────────────────────────
+  Map          _live       = {};
+  bool         _loading    = true;
+  bool         _cancelling = false;
+  Timer?       _timer;
+  final _mapCtrl = MapController();
+  bool         _mapReady   = false;
+  List<LatLng> _routePoints = [];
 
-  // ── State ────────────────────────────────────────────────────
-  Map    _data    = {};
-  bool   _loading = true;
-  bool   _busy    = false;
-  String? _error;
-  Timer? _timer;
-  Timer? _locationTimer;
-
+  // Tracks whether screenshot/screen-recording protection is currently ON,
+  // so we only toggle the native flag when the state actually changes.
+  // NOTE: protection still runs silently in the background — we simply no
+  // longer surface any UI copy about it to the user.
   bool _screenshotBlocked = false;
 
-  late AnimationController _docPulse;
-  late Animation<double>   _docGlow;
+  // Whether feedback has already been submitted for this order — checked
+  // locally (SharedPreferences) as a fallback in case the backend order
+  // payload doesn't yet return a feedback flag.
+  bool _feedbackGiven = false;
 
-  // ── Helpers ──────────────────────────────────────────────────
-  dynamic get _orderId => widget.order["id"];
-  int     get _userId  => widget.userId;
+  late AnimationController _anim;
+  late Animation<double>   _fade;
 
-  String get _status =>
-      (_data["status"] ?? widget.order["status"] ?? "").toString().toUpperCase();
-  String get _code =>
-      (_data["order_code"] ?? widget.order["order_code"] ?? "").toString();
+  // ── Rich green for total amount (better contrast than a washed-out success) ──
+  static const Color _totalGreen = Color(0xFF16A34A);
 
-  bool get _notAccepted  => (_data["caretaker_id"] ?? widget.order["caretaker_id"]) == null;
-  bool get _isAccepted   => _status == "ACCEPTED";
-  bool get _isConfirmed  => _status == "CONFIRMED";
-  bool get _onTheWay     => _status == "ON_THE_WAY";
-  bool get _isCompleted  => _status == "COMPLETED";
-  bool get _isCancelled  => _status == "CANCELLED" || _status == "CARETAKER_CANCELLED";
+  // ── Instagram-style verified blue for professional caretakers ────────────────
+  static const Color _verifiedBlue = Color(0xFF0095F6);
 
-  bool get _isPaid => (_data["payment_status"] ?? widget.order["payment_status"] ?? "")
-      .toString().toUpperCase() == "PAID";
-  bool get _isCOD  => (_data["payment_method"] ?? widget.order["payment_method"] ?? "COD")
-      .toString().toUpperCase() == "COD";
+  // ── Dark mode ─────────────────────────────────────────────────────────────────
+  bool get _dark => themeNotifier.value == ThemeMode.dark;
 
-  // Arrival OTP: 1/true once the caretaker has verified the OTP shown to
-  // the careseeker. This — not just "ON_THE_WAY" status — is what proves
-  // the caretaker actually reached the customer, so it gates payment
-  // collection and Complete Service below.
-  bool get _otpVerified {
-    final v = _data["otp_verified"] ?? widget.order["otp_verified"] ?? 0;
+  Color get _surface => _dark ? const Color(0xFF1E293B) : AppColors.cardBg;
+  Color get _bg      => _dark ? const Color(0xFF0F172A) : AppColors.lightBg;
+  Color get _text    => _dark ? Colors.white : AppColors.dark;
+  Color get _subText => _dark ? Colors.white60 : AppColors.muted;
+  Color get _divider => _dark ? Colors.white.withOpacity(0.07) : AppColors.border;
+
+  // ── Derived getters ───────────────────────────────────────────────────────────
+  Map    get _order      => _live.isNotEmpty ? _live : Map.from(widget.orders.first);
+  String get _status     => (_order["status"] ?? "").toString().toUpperCase();
+  bool   get _cancelled  => _status == "CANCELLED";
+  bool   get _completed  => _status == "COMPLETED";
+  bool   get _cancellable => ["CONFIRMED", "ACCEPTED"].contains(_status);
+
+  // Screenshots are allowed only while the booking is still pending
+  // (CONFIRMED / awaiting a caretaker). The moment it's ACCEPTED — and for
+  // every stage after that — screenshots & screen recording get blocked to
+  // protect the caretaker's live location, phone number, etc. This runs
+  // silently; no banner is shown to the user about it.
+  bool get _shouldBlockScreenshot =>
+      ["ACCEPTED", "ON_THE_WAY", "COMPLETED"].contains(_status);
+
+  num  get _subtotal      => num.tryParse(_order["subtotal"]?.toString()       ?? "0") ?? 0;
+  num  get _serviceCharge => num.tryParse(_order["service_charge"]?.toString() ?? "0") ?? 0;
+  num  get _total         => num.tryParse(_order["total"]?.toString()           ?? "0") ?? 0;
+  bool get _hasCharge     => _serviceCharge > 0;
+
+String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? _order["category"] ?? "Service").toString();
+
+  num    get _discount    => num.tryParse(_order["discount_amount"]?.toString() ?? "0") ?? 0;
+  bool   get _hasDiscount => _discount > 0;
+  String get _couponCode  => (_order["coupon_code"] ?? "").toString();
+
+  // ── Privacy guard: hide carer details once service is completed ───────────────
+  bool   get _hasCarer   =>
+      !_completed &&
+      (_order["caregiver_name"]?.toString().trim().isNotEmpty ?? false);
+  String get _carerPhone => _completed ? "" : (_order["caregiver_phone"]?.toString() ?? "");
+
+  // ── Professional / verified caretaker badge (Instagram-style blue tick) ──────
+  bool get _isVerifiedCarer {
+    final v = _order["caregiver_verified"] ??
+        _order["caregiver_is_professional"] ??
+        _order["is_verified"] ??
+        _order["caretaker_verified"];
+    if (v == null) return false;
+    if (v is bool) return v;
+    return v.toString().trim().toLowerCase() == "true" || v.toString() == "1";
+  }
+
+  // ── Feedback-already-given check ──────────────────────────────────────────────
+  // Prefers a backend-provided flag (feedback_given / has_feedback / rating)
+  // if present, and falls back to a locally persisted flag (SharedPreferences)
+  // set the moment feedback is successfully submitted from this device.
+  bool get _feedbackAlreadyGiven {
+    final v = _order["feedback_given"] ??
+        _order["has_feedback"] ??
+        _order["rating"];
+    if (v == null) return _feedbackGiven;
+    if (v is bool) return v;
+    if (v is num) return v > 0;
+    final s = v.toString().trim().toLowerCase();
+    if (s.isEmpty || s == "0" || s == "null") return _feedbackGiven;
+    return s == "true" || s == "1" || double.tryParse(s) != null && double.parse(s) > 0;
+  }
+
+  // ✅ NEW — Service OTP getters
+  bool get _hasOtp =>
+      (_order["otp"]?.toString().trim().isNotEmpty ?? false);
+
+  bool get _otpExpired {
+    final v = _order["otp_expired"];
+    if (v == null) return false;
     if (v is bool) return v;
     return v.toString() == "1" || v.toString().toLowerCase() == "true";
   }
 
-  String get _rawDocUrls {
-    final raw = _data["document_urls"];
-    if (raw == null) return "";
-    return raw.toString().trim();
-  }
-  bool get _hasDocs =>
-      _rawDocUrls.isNotEmpty && _rawDocUrls != "null" && _rawDocUrls != "NULL";
-  List<String> get _docUrls =>
-      _rawDocUrls.split("|||").where((u) => u.trim().isNotEmpty).toList();
-
-  // ── Customer location ────────────────────────────────────────
-  LatLng get _loc {
-    try {
-      final lat = double.parse(
-          (_data["latitude"]  ?? widget.order["latitude"]  ?? "12.9716").toString());
-      final lng = double.parse(
-          (_data["longitude"] ?? widget.order["longitude"] ?? "77.5946").toString());
-      return LatLng(lat, lng);
-    } catch (_) { return const LatLng(12.9716, 77.5946); }
+  bool get _otpVerified {
+    final v = _order["otp_verified"];
+    if (v == null) return false;
+    if (v is bool) return v;
+    return v.toString() == "1" || v.toString().toLowerCase() == "true";
   }
 
-  LatLng? get _caretakerLoc {
-    try {
-      final lat = double.parse((_data["caretaker_latitude"] ?? "").toString());
-      final lng = double.parse((_data["caretaker_longitude"] ?? "").toString());
-      return LatLng(lat, lng);
-    } catch (_) { return null; }
+  // Shown for any active (non-cancelled, non-completed) booking that has an
+  // OTP which hasn't expired yet — i.e. from the moment the order is placed
+  // right up until the service is marked complete.
+  bool get _showOtpCard => _hasOtp && !_completed && !_cancelled && !_otpExpired;
+
+  double? get _cLat => double.tryParse(_order["caretaker_latitude"]?.toString()  ?? "");
+  double? get _cLng => double.tryParse(_order["caretaker_longitude"]?.toString() ?? "");
+  double? get _uLat => double.tryParse(_order["latitude"]?.toString()            ?? "");
+  double? get _uLng => double.tryParse(_order["longitude"]?.toString()           ?? "");
+
+  bool get _tracking =>
+      _status == "ON_THE_WAY" &&
+      _cLat != null && _cLng != null &&
+      _uLat != null && _uLng != null;
+
+  double get _meters {
+    if (!_tracking) return 0;
+    return const Distance().as(LengthUnit.Meter, LatLng(_cLat!, _cLng!), LatLng(_uLat!, _uLng!));
   }
 
-  // Screenshot is restricted for the ENTIRE lifecycle of an active/closed
-  // booking — i.e. from the moment it's not yet accepted (still carries
-  // sensitive client data) all the way through completion. Only a freshly
-  // cancelled booking with nothing sensitive left to protect is exempt.
-  // In practice: block always, except when cancelled.
-  // NOTE: the protection itself is unchanged — only the visual "Secure"
-  // header indicator has been removed per request, so this still runs
-  // silently in the background.
-  bool get _shouldBlockScreenshot => !_isCancelled;
-
-  // ── Lifecycle ────────────────────────────────────────────────
-  @override
-  void initState() {
-    super.initState();
-    _data = Map.from(widget.order);
-    WidgetsBinding.instance.addObserver(this);
-
-    if (_onTheWay && !_isCompleted) {
-      _startLiveTracking();
-    }
-
-    _applyScreenshotPolicy();
-
-    _fetch();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _fetch());
-
-    _docPulse = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1600))
-      ..repeat(reverse: true);
-    _docGlow = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _docPulse, curve: Curves.easeInOut));
+  String get _distLabel {
+    final m = _meters;
+    return m < 1000 ? "${m.round()} m away" : "${(m / 1000).toStringAsFixed(1)} km away";
   }
 
-  void _applyScreenshotPolicy() {
-    if (_shouldBlockScreenshot) {
-      _blockScreenshots();
-    } else {
-      _allowScreenshots();
-    }
+  String get _etaLabel {
+    final mins = _meters <= 0 ? 0 : ((_meters / 1000 / 25) * 60).ceil();
+    if (mins <= 0) return "Arriving soon";
+    return "Arriving in ~$mins min${mins == 1 ? '' : 's'}";
   }
 
-  void _blockScreenshots() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-        overlays: SystemUiOverlay.values);
-    // FLAG_SECURE equivalent — prevents screenshots and screen recording
-    SystemChannels.platform.invokeMethod('SystemChrome.setApplicationSwitcherDescription', {
-      'label': 'Medico',
-      'primaryColor': 0xFF0B8FAC,
-    });
-    // Use secure flag via platform channel
-    _setSecureFlag(true);
-    if (mounted) setState(() => _screenshotBlocked = true);
-  }
-
-  void _allowScreenshots() {
-    _setSecureFlag(false);
-    if (mounted) setState(() => _screenshotBlocked = false);
-  }
-
-  Future<void> _setSecureFlag(bool secure) async {
-    try {
-      await SystemChannels.platform.invokeMethod(
-        'SystemChrome.setSystemUIOverlayStyle',
-        <String, dynamic>{},
-      );
-      // Primary approach: use platform-specific secure window flag
-      const channel = MethodChannel('com.medico.app/security');
-      await channel.invokeMethod('setSecureFlag', {'secure': secure});
-    } catch (_) {
-      // If custom channel not implemented, fall back gracefully
-      // The UI overlay below still visually blocks content when needed
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Re-apply policy when app comes back to foreground
-    if (state == AppLifecycleState.resumed) {
-      _applyScreenshotPolicy();
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _timer?.cancel();
-    _locationTimer?.cancel();
-    _docPulse.dispose();
-    _allowScreenshots(); // Always lift restriction on exit
-    super.dispose();
-  }
-
-  // ── Network ──────────────────────────────────────────────────
-  Future<void> _fetch() async {
-    try {
-      final res = await http
-          .get(Uri.parse(Api.caretakerOrderDetails(
-              _orderId is int ? _orderId : int.parse(_orderId.toString()))))
-          .timeout(const Duration(seconds: 10));
-      final d = jsonDecode(res.body);
-      if (d["success"] == true && mounted) {
-        setState(() {
-          _data = d["data"];
-          _loading = false;
-          _error = null;
-        });
-        // Re-apply screenshot policy whenever status changes
-        _applyScreenshotPolicy();
-      } else if (mounted) {
-        setState(() { _loading = false; _error = d["message"]?.toString(); });
-      }
-    } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
-    }
-  }
-
-  Future<bool> _post(String url, Map body) async {
-    if (_busy) return false;
-    setState(() => _busy = true);
-    try {
-      final res = await http.post(Uri.parse(url),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode(body));
-      final d = jsonDecode(res.body);
-      if (d["success"] != true) throw Exception(d["message"] ?? "Action failed");
-      await _fetch();
-      return true;
-    } catch (e) {
-      _toast(e.toString().replaceAll("Exception: ", ""), type: _ToastType.error);
-      return false;
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  void _toast(String msg, {_ToastType type = _ToastType.success}) {
-    if (!mounted) return;
-    final cfg = {
-      _ToastType.success: (AppColors.primary,  Icons.check_circle_rounded,   Colors.white),
-      _ToastType.error:   (_red,               Icons.cancel_rounded,          Colors.white),
-      _ToastType.warn:    (_amber,              Icons.warning_amber_rounded,   Colors.white),
-      _ToastType.info:    (_blue,               Icons.info_outline_rounded,    Colors.white),
-    }[type]!;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(
-          content: Row(children: [
-            Icon(cfg.$2, color: cfg.$3, size: 18),
-            const SizedBox(width: 10),
-            Expanded(child: Text(msg, style: TextStyle(color: cfg.$3, fontSize: 13))),
-          ]),
-          backgroundColor: cfg.$1,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          duration: const Duration(seconds: 3)));
-  }
-
-  // ── Copy helper ────────────────────────────────────────────────
-  // Used by both the header title and the "Booking ID" row so users
-  // can quickly copy the order code to share with support, etc.
-  Future<void> _copyOrderCode() async {
-    if (_code.isEmpty) return;
-    await Clipboard.setData(ClipboardData(text: _code));
-    _toast("Booking ID copied · $_code", type: _ToastType.info);
-  }
-
-  // ── Actions ──────────────────────────────────────────────────
-  Future<void> _accept() async {
-    final ok = await _post(
-        "${Api.baseUrl}/caretaker/accept",
-        {"order_id": _orderId, "caretaker_id": _userId});
-    if (ok) _toast("Booking accepted successfully ✓");
-  }
-
-  Future<void> _startJourney() async {
-    final ok = await _post(
-        "${Api.baseUrl}/caretaker/start",
-        {"order_id": _orderId, "caretaker_id": _userId});
-    if (ok) {
-      _toast("Journey started ✓");
-      await _startLiveTracking();
-      if (mounted) _openOtpScreen();
-    }
-  }
-
-  // Pushes the arrival-OTP screen. Called automatically once the journey
-  // starts, and also reachable again from the CTA button if the caretaker
-  // backs out before verifying (status stays ON_THE_WAY, otp_verified
-  // stays 0, so the CTA keeps offering "Verify Arrival OTP").
-  Future<void> _openOtpScreen() async {
-    final verified = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CaretakerOtpScreen(
-          orderId: _orderId is int ? _orderId : int.parse(_orderId.toString()),
-          caretakerId: _userId,
-          orderCode: _code,
-        ),
-      ),
-    );
-    if (verified == true) {
-      _toast("Arrival OTP verified ✓ Service started");
-    }
-    _fetch();
-  }
-
-  Future<void> _startLiveTracking() async {
-    final permission = await Geolocator.requestPermission();
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      _toast("Location permission denied", type: _ToastType.error);
-      return;
-    }
-    _locationTimer?.cancel();
-    _locationTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      try {
-        final pos = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.high);
-        await http.post(
-          Uri.parse("${Api.baseUrl}/caretaker/update-location"),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode({
-            "order_id":     _orderId,
-            "caretaker_id": _userId,
-            "latitude":     pos.latitude,
-            "longitude":    pos.longitude,
-          }),
-        );
-      } catch (_) {}
-    });
-  }
-
-  Future<void> _goToPaymentScreen() async {
-    await Navigator.push(context, MaterialPageRoute(
-        builder: (_) => CaretakerPaymentScreen(
-          orderId:     _orderId is int ? _orderId : int.parse(_orderId.toString()),
-          caretakerId: _userId,
-        )));
-    _fetch();
-  }
-
-  Future<void> _complete() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Complete Service?",
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Text(
-            "Mark this booking as completed? The client will be notified."),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text("Cancel")),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10))),
-            child: const Text("Yes, Complete"),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) {
-      final success = await _post(
-          "${Api.baseUrl}/caretaker/complete",
-          {"order_id": _orderId, "caretaker_id": _userId});
-      if (success) {
-        _locationTimer?.cancel();
-        _toast("Service marked as completed ✓");
-      }
-    }
-  }
-
-  Future<void> _cancel() async {
-    final reasonCtrl = TextEditingController();
-    final confirmed  = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _CancelSheet(
-        orderCode:    _code,
-        isOnlinePaid: !_isCOD && _isPaid,
-        controller:   reasonCtrl,
-      ),
-    );
-    if (confirmed != true) return;
-    final reason = reasonCtrl.text.trim().isNotEmpty
-        ? reasonCtrl.text.trim()
-        : "Cancelled by caretaker";
-    final ok = await _post(
-        "${Api.baseUrl}/caretaker/cancel",
-        {"order_id": _orderId, "caretaker_id": _userId, "cancel_reason": reason});
-    if (ok) {
-      if (!_isCOD && _isPaid)
-        _toast("Paid booking flagged for admin reassignment", type: _ToastType.warn);
-      else
-        _toast("Booking cancelled · reopened for reassignment",
-            type: _ToastType.info);
-    }
-  }
-
-  void _navigate() => launchUrl(
-      Uri.parse("google.navigation:q=${_loc.latitude},${_loc.longitude}"),
-      mode: LaunchMode.externalApplication);
-
-  // ── CTA logic ────────────────────────────────────────────────
-  String get _ctaLabel {
-    if (_isCompleted) return "Service Completed";
-    if (_isCancelled) return "Booking Cancelled";
-    if (_notAccepted) return "Accept Booking";
-    if (_isAccepted || _isConfirmed) return "Start Journey";
-    if (_onTheWay && !_otpVerified) return "Verify Arrival OTP";
-    if (_onTheWay && _otpVerified && !_isPaid) return "Collect Payment";
-    if (_onTheWay && _otpVerified && _isPaid)  return "Complete Service";
-    return "View Details";
-  }
-
-  VoidCallback? get _ctaAction {
-    if (_isCompleted || _isCancelled) return null;
-    if (_notAccepted) return _accept;
-    if (_isAccepted || _isConfirmed) return _startJourney;
-    if (_onTheWay && !_otpVerified) return _openOtpScreen;
-    if (_onTheWay && _otpVerified && !_isPaid) return _goToPaymentScreen;
-    if (_onTheWay && _otpVerified && _isPaid)  return _complete;
-    return null;
-  }
-
-  Color get _ctaColor {
-    if (_isCompleted || _isCancelled) return Colors.grey;
-    if (_notAccepted) return AppColors.primary;
-    if (_isAccepted || _isConfirmed) return _blue;
-    if (_onTheWay && !_otpVerified) return _purple;
-    if (_onTheWay && _otpVerified && !_isPaid) return _amber;
-    if (_onTheWay && _otpVerified && _isPaid)  return AppColors.primary;
-    return Colors.grey;
-  }
-
-  IconData get _ctaIcon {
-    if (_isCompleted) return Icons.check_circle_rounded;
-    if (_isCancelled) return Icons.cancel_rounded;
-    if (_notAccepted) return Icons.handshake_rounded;
-    if (_isAccepted || _isConfirmed) return Icons.directions_run_rounded;
-    if (_onTheWay && !_otpVerified) return Icons.verified_user_rounded;
-    if (_onTheWay && _otpVerified && !_isPaid) return Icons.payment_rounded;
-    if (_onTheWay && _otpVerified && _isPaid)  return Icons.done_all_rounded;
-    return Icons.info_rounded;
-  }
-
-  bool get _canCancel =>
-      !_notAccepted &&
-      !_isCompleted &&
-      !_isCancelled &&
-      (_isAccepted || _isConfirmed);
-
-  // ── Status display ───────────────────────────────────────────
-  String get _statusLabel => switch (_status) {
-    "CONFIRMED"           => "Available",
-    "ACCEPTED"            => "Accepted",
-    "ON_THE_WAY"          => "On The Way",
-    "COMPLETED"           => "Completed",
-    "CANCELLED"           => "Cancelled",
-    "CARETAKER_CANCELLED" => "Cancelled",
-    _                     => _status.isEmpty ? "Pending" : _status,
+  int get _step => switch (_status) {
+    "CONFIRMED"  => 0,
+    "ACCEPTED"   => 1,
+    "ON_THE_WAY" => 2,
+    "COMPLETED"  => 3,
+    _            => 0,
   };
 
   Color get _statusColor => switch (_status) {
-    "COMPLETED"                          => AppColors.primary,
-    "CANCELLED" || "CARETAKER_CANCELLED" => _red,
-    "ON_THE_WAY"                         => _blue,
-    "ACCEPTED"                           => _amber,
-    _                                    => Colors.grey,
+    "COMPLETED"  => _totalGreen,
+    "ACCEPTED"   => AppColors.primary,
+    "ON_THE_WAY" => AppColors.accent,
+    "CONFIRMED"  => AppColors.warning,
+    "CANCELLED"  => AppColors.danger,
+    _            => AppColors.muted,
   };
 
-  // ── Formatters ───────────────────────────────────────────────
-  String _fmtDate(dynamic d) {
-    if (d == null || d.toString().isEmpty) return "—";
+  String get _statusLabel => switch (_status) {
+    "CONFIRMED"  => "Awaiting Caretaker",
+    "ACCEPTED"   => "Caretaker Assigned",
+    "ON_THE_WAY" => "On The Way",
+    "COMPLETED"  => "Service Completed",
+    "CANCELLED"  => "Booking Cancelled",
+    _            => _status,
+  };
+
+  String get _fmtDate {
     try {
-      final dt = DateTime.parse(d.toString()).toLocal();
-      const mo = [
-        'Jan','Feb','Mar','Apr','May','Jun',
-        'Jul','Aug','Sep','Oct','Nov','Dec'
-      ];
-      return "${dt.day.toString().padLeft(2,'0')} ${mo[dt.month-1]} ${dt.year}";
-    } catch (_) { return d.toString(); }
+      final d = DateTime.parse(_order["date"].toString()).toLocal();
+      const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return "${d.day.toString().padLeft(2, '0')} ${m[d.month - 1]} ${d.year}";
+    } catch (_) { return _order["date"]?.toString() ?? "-"; }
   }
 
-  String _fmtSlot(dynamic s) {
-    if (s == null || s.toString().isEmpty) return "—";
+  Map<String, dynamic> get _refundPreview {
+    final method  = (_order["payment_method"] ?? "").toString();
+    final pStatus = (_order["payment_status"] ?? "").toString().toUpperCase();
+    final sub     = double.tryParse(_order["subtotal"]?.toString() ?? "0") ??
+                    double.tryParse(_order["total"]?.toString()    ?? "0") ?? 0;
+    if (method != "RAZORPAY" || pStatus != "PAID") {
+      return {"percent": 0, "amount": 0.0, "note": "COD bookings are not eligible for refund."};
+    }
     try {
-      final parts = s.toString().split(":");
-      if (parts.length < 2) return s.toString();
-      final h = int.parse(parts[0]);
-      return "${h % 12 == 0 ? 12 : h % 12}:${parts[1]} ${h >= 12 ? 'PM' : 'AM'}";
-    } catch (_) { return s.toString(); }
+      final slot = DateTime.parse(
+          "${_order["date"].toString().split("T").first}T${_order["slot"] ?? "00:00:00"}");
+      final diff = slot.difference(DateTime.now());
+      if (diff.inHours >= 3) return {"percent": 100, "amount": sub,      "note": "Full refund. Service charge is non-refundable."};
+      if (!diff.isNegative) return {"percent": 50,  "amount": sub * 0.5, "note": "50% refund. Service charge is non-refundable."};
+      return {"percent": 0, "amount": 0.0, "note": "Slot time passed — no refund applicable."};
+    } catch (_) { return {"percent": 0, "amount": 0.0, "note": "Unable to calculate refund."}; }
   }
 
-  // ── Build ────────────────────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    final name      = (_data["careseeker_name"]  ?? widget.order["careseeker_name"]  ?? "Client").toString();
-    final phone     = (_data["careseeker_phone"] ?? widget.order["careseeker_phone"] ?? "").toString();
-    final category  = (_data["category"]          ?? widget.order["category"]         ?? "").toString();
-    final slot      = _fmtSlot(_data["slot"]       ?? widget.order["slot"]);
-    final location  = (_data["location"]           ?? widget.order["location"]         ?? "—").toString();
-    final services  = (_data["services"]            ?? widget.order["services"]         ?? "").toString();
-    final total     = (_data["total"]               ?? widget.order["total"]            ?? 0).toString();
-    final payMethod = (_data["payment_method"]      ?? widget.order["payment_method"]   ?? "COD").toString();
-    final payStatus = (_data["payment_status"]      ?? widget.order["payment_status"]   ?? "PENDING").toString();
-    final date      = _fmtDate(_data["date"]        ?? widget.order["date"]);
-
-    return Scaffold(
-      backgroundColor: AppColors.lightBg,
-      body: Stack(
-        children: [
-          Column(children: [
-
-            // ── Header ──────────────────────────────────────────────
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 52, 16, 22),
-              decoration: BoxDecoration(
-                gradient: AppColors.gradient,
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(26)),
-              ),
-              child: Row(children: [
-                GestureDetector(
-                  onTap: () => Navigator.pop(context),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(10)),
-                    child: const Icon(Icons.arrow_back_ios_new_rounded,
-                        color: Colors.white, size: 18),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: _code.isNotEmpty ? _copyOrderCode : null,
-                    behavior: HitTestBehavior.opaque,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(children: [
-                          Flexible(
-                            child: Text(
-                              _code.isNotEmpty ? _code : "Service Details",
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          if (_code.isNotEmpty) ...[
-                            const SizedBox(width: 6),
-                            const Icon(Icons.copy_rounded,
-                                color: Colors.white70, size: 15),
-                          ],
-                        ]),
-                        if (category.isNotEmpty)
-                          Text(category,
-                              style: const TextStyle(
-                                  color: Colors.white70, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                ),
-                if (_hasDocs && !_isCompleted)
-                  AnimatedBuilder(
-                    animation: _docGlow,
-                    builder: (_, __) => Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Colors.orange
-                            .withOpacity(0.15 + 0.15 * _docGlow.value),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                            color: Colors.orange
-                                .withOpacity(0.6 + 0.4 * _docGlow.value)),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.description_rounded,
-                            color: Colors.orange, size: 13),
-                        const SizedBox(width: 4),
-                        Text(
-                          "${_docUrls.length} Doc${_docUrls.length > 1 ? 's' : ''}",
-                          style: const TextStyle(
-                              color: Colors.orange,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ]),
-                    ),
-                  ),
-                if (_loading)
-                  const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2))
-                else
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                        color: _statusColor.withOpacity(0.25),
-                        borderRadius: BorderRadius.circular(20)),
-                    child: Text(_statusLabel,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12)),
-                  ),
-              ]),
-            ),
-
-            // ── Error banner ─────────────────────────────────────────
-            if (_error != null)
-              Container(
-                color: _red.withOpacity(0.1),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(children: [
-                  const Icon(Icons.warning_amber_rounded, color: _red, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(_error!,
-                      style: const TextStyle(color: _red, fontSize: 12))),
-                  GestureDetector(
-                    onTap: _fetch,
-                    child: const Text("Retry",
-                        style: TextStyle(
-                            color: _red,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12)),
-                  ),
-                ]),
-              ),
-
-            // ── Scrollable body ──────────────────────────────────────
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-                  // ── Map — hidden when COMPLETED ────────────────────
-                  if (_isCompleted)
-                    _locationRestrictedBox(
-                      label: "Location Restricted",
-                      sublabel: "🔒  Hidden after service completion",
-                    )
-                  else
-                    Container(
-                      height: 165,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4))],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: FlutterMap(
-                        options: MapOptions(initialCenter: _loc, initialZoom: 15),
-                        children: [
-                          TileLayer(
-                            urlTemplate:
-                                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-                            userAgentPackageName: 'com.medico.app',
-                          ),
-                          MarkerLayer(markers: [
-                            Marker(
-                              point: _loc,
-                              width: 40,
-                              height: 40,
-                              child: const Icon(Icons.location_pin,
-                                  color: Colors.red, size: 38),
-                            ),
-                            if (_caretakerLoc != null)
-                              Marker(
-                                point: _caretakerLoc!,
-                                width: 42,
-                                height: 42,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary,
-                                    shape: BoxShape.circle,
-                                    boxShadow: [BoxShadow(
-                                      color: AppColors.primary.withOpacity(0.35),
-                                      blurRadius: 8,
-                                    )],
-                                  ),
-                                  child: const Icon(
-                                    Icons.person_pin_circle_rounded,
-                                    color: Colors.white,
-                                    size: 30,
-                                  ),
-                                ),
-                              ),
-                          ]),
-                        ],
-                      ),
-                    ),
-                  const SizedBox(height: 14),
-
-                  // ── Client card — hidden when COMPLETED ───────────
-                  if (_isCompleted)
-                    _clientRestrictedBox()
-                  else
-                    _card(child: Row(children: [
-                      CircleAvatar(
-                        radius: 24,
-                        backgroundColor: AppColors.primary.withOpacity(0.12),
-                        child: const Icon(Icons.person_rounded,
-                            color: AppColors.primary, size: 26),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(name,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 15)),
-                          if (phone.isNotEmpty)
-                            Text(phone,
-                                style: TextStyle(
-                                    color: Colors.grey.shade600, fontSize: 13)),
-                        ],
-                      )),
-                      if (phone.isNotEmpty)
-                        GestureDetector(
-                          onTap: () => launchUrl(Uri.parse("tel:$phone")),
-                          child: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                                color: AppColors.primary,
-                                borderRadius: BorderRadius.circular(12)),
-                            child: const Icon(Icons.call_rounded,
-                                color: Colors.white, size: 20),
-                          ),
-                        ),
-                    ])),
-                  const SizedBox(height: 12),
-
-                  // ── Booking details card ───────────────────────────
-                  _card(child: Column(children: [
-                    if (_code.isNotEmpty)
-                      _copyableRow("Booking ID", _code),
-                    if (category.isNotEmpty)
-                      _row("Category",    category),
-                    if (services.isNotEmpty)
-                      _rowMultiline("Services", services),
-                    _row("Date",       date),
-                    if (slot != "—")
-                      _row("Time Slot", slot),
-                    if (!_isCompleted)
-                      _row("Location", location),
-                    _row("Amount",     "₹$total"),
-                    _row("Payment",    payMethod),
-                    _row("Pay Status", payStatus,
-                        valueColor: payStatus.toUpperCase() == "PAID"
-                            ? AppColors.primary
-                            : _amber,
-                        isLast: true),
-                  ])),
-                  const SizedBox(height: 14),
-
-                  // ── Location locked banner — when COMPLETED ────────
-                  if (_isCompleted)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 14),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppColors.primary.withOpacity(0.25)),
-                      ),
-                      child: Row(children: [
-                        Icon(Icons.location_off_rounded,
-                            color: AppColors.primary, size: 18),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            "Client address will not be revealed once the service is completed.",
-                            style: TextStyle(
-                                color: AppColors.primary,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500),
-                          ),
-                        ),
-                      ]),
-                    ),
-
-                  // ── Status stepper ─────────────────────────────────
-                  _statusStepper(),
-                  const SizedBox(height: 14),
-
-                  // ── Medical documents ──────────────────────────────
-                  if (_isCompleted) ...[
-                    if (_hasDocs) _docsRestrictedBox(),
-                    const SizedBox(height: 14),
-                  ] else if (_hasDocs && _docUrls.isNotEmpty) ...[
-                    AnimatedBuilder(
-                      animation: _docGlow,
-                      builder: (_, child) => Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [BoxShadow(
-                            color: _orange.withOpacity(
-                                0.12 + 0.10 * _docGlow.value),
-                            blurRadius: 18 + 8 * _docGlow.value,
-                            spreadRadius: 2,
-                          )],
-                        ),
-                        child: child,
-                      ),
-                      child: Container(
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                              colors: [Color(0xFFFFF3E0), Color(0xFFFFECB3)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                              color: _orange.withOpacity(0.45), width: 1.5),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 11),
-                              decoration: const BoxDecoration(
-                                gradient: LinearGradient(colors: [
-                                  Color(0xFFFF6B00),
-                                  Color(0xFFFF8F00),
-                                ]),
-                                borderRadius: BorderRadius.vertical(
-                                    top: Radius.circular(16)),
-                              ),
-                              child: Row(children: [
-                                const Icon(
-                                    Icons.medical_information_rounded,
-                                    color: Colors.white,
-                                    size: 20),
-                                const SizedBox(width: 9),
-                                const Expanded(
-                                  child: Text(
-                                    "⚠️  PATIENT MEDICAL DOCUMENTS",
-                                    style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 13,
-                                        letterSpacing: 0.5),
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.25),
-                                      borderRadius: BorderRadius.circular(20)),
-                                  child: Text(
-                                    "${_docUrls.length} file${_docUrls.length > 1 ? 's' : ''}",
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                              ]),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 7),
-                                decoration: BoxDecoration(
-                                  color: _orange.withOpacity(0.10),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                      color: _orange.withOpacity(0.3)),
-                                ),
-                                child: const Row(children: [
-                                  Icon(Icons.touch_app_rounded,
-                                      color: Color(0xFFE65100), size: 15),
-                                  SizedBox(width: 7),
-                                  Expanded(
-                                    child: Text(
-                                      "Review all documents BEFORE starting service",
-                                      style: TextStyle(
-                                          color: Color(0xFFE65100),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700),
-                                    ),
-                                  ),
-                                ]),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.fromLTRB(12, 0, 12, 14),
-                              child: Column(
-                                children: List.generate(_docUrls.length, (i) {
-                                  final url   = _docUrls[i].trim();
-                                  final isPdf = url.toLowerCase().endsWith(".pdf");
-                                  final isImg = url.toLowerCase().contains(".jpg") ||
-                                      url.toLowerCase().contains(".jpeg") ||
-                                      url.toLowerCase().contains(".png") ||
-                                      url.toLowerCase().contains(".webp");
-                                  final label = isPdf
-                                      ? "Prescription / Report PDF"
-                                      : isImg
-                                          ? "Medical Image / Scan"
-                                          : "Medical Document";
-                                  final icon  = isPdf
-                                      ? Icons.picture_as_pdf_rounded
-                                      : isImg
-                                          ? Icons.image_rounded
-                                          : Icons.insert_drive_file_rounded;
-                                  final clr   = isPdf
-                                      ? const Color(0xFFD32F2F)
-                                      : const Color(0xFF1565C0);
-
-                                  return Container(
-                                    margin: const EdgeInsets.only(bottom: 10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(13),
-                                      border: Border.all(
-                                          color: Colors.orange.shade200),
-                                      boxShadow: [BoxShadow(
-                                          color: Colors.orange.withOpacity(0.08),
-                                          blurRadius: 6,
-                                          offset: const Offset(0, 3))],
-                                    ),
-                                    child: Material(
-                                      color: Colors.transparent,
-                                      borderRadius: BorderRadius.circular(13),
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(13),
-                                        onTap: () => launchUrl(
-                                            Uri.parse(url),
-                                            mode: LaunchMode.externalApplication),
-                                        child: Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 14, vertical: 13),
-                                          child: Row(children: [
-                                            Container(
-                                              width: 44,
-                                              height: 44,
-                                              decoration: BoxDecoration(
-                                                  color: clr.withOpacity(0.10),
-                                                  borderRadius:
-                                                      BorderRadius.circular(10)),
-                                              child: Icon(icon,
-                                                  color: clr, size: 24),
-                                            ),
-                                            const SizedBox(width: 13),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(label,
-                                                      style: const TextStyle(
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                          fontSize: 13,
-                                                          color: Colors.black87)),
-                                                  const SizedBox(height: 3),
-                                                  Text(
-                                                    "Document ${i + 1} · Tap to open",
-                                                    style: TextStyle(
-                                                        fontSize: 11,
-                                                        color: Colors
-                                                            .grey.shade500),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(
-                                                  horizontal: 14, vertical: 8),
-                                              decoration: BoxDecoration(
-                                                gradient: const LinearGradient(
-                                                    colors: [
-                                                      Color(0xFFFF6B00),
-                                                      Color(0xFFFF8F00),
-                                                    ]),
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                                boxShadow: [BoxShadow(
-                                                    color: Colors.orange
-                                                        .withOpacity(0.35),
-                                                    blurRadius: 6,
-                                                    offset:
-                                                        const Offset(0, 3))],
-                                              ),
-                                              child: const Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(Icons.visibility_rounded,
-                                                      color: Colors.white,
-                                                      size: 15),
-                                                  SizedBox(width: 5),
-                                                  Text("VIEW",
-                                                      style: TextStyle(
-                                                          color: Colors.white,
-                                                          fontWeight:
-                                                              FontWeight.w800,
-                                                          fontSize: 12,
-                                                          letterSpacing: 0.5)),
-                                                ],
-                                              ),
-                                            ),
-                                          ]),
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                  ],
-
-                  // ── Payment hint banner ────────────────────────────
-                  if (!_notAccepted && !_isCompleted && !_isCancelled)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      margin: const EdgeInsets.only(bottom: 14),
-                      decoration: BoxDecoration(
-                        color: _amber.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: _amber.withOpacity(0.3)),
-                      ),
-                      child: Row(children: [
-                        const Icon(Icons.info_outline_rounded,
-                            color: _amber, size: 18),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            !_otpVerified
-                                ? "Verify the arrival OTP given by the customer before collecting payment or completing service."
-                                : _isCOD
-                                    ? "COD Order — collect payment and mark payment received before completing service."
-                                    : "Online Order — verify payment received, then mark complete.",
-                            style: TextStyle(
-                                color: Colors.grey.shade700, fontSize: 12),
-                          ),
-                        ),
-                      ]),
-                    ),
-
-                  // ── Quick action row ───────────────────────────────
-                  Row(children: [
-                    _actionBtn(
-                      Icons.navigation_rounded,
-                      "Navigate",
-                      _blue,
-                      _isCompleted ? null : _navigate,
-                    ),
-                    const SizedBox(width: 10),
-                    _actionBtn(
-                      Icons.payment_rounded,
-                      "Payment",
-                      _amber,
-                      (!_onTheWay || _isCancelled || !_otpVerified)
-                          ? null
-                          : _goToPaymentScreen,
-                    ),
-                    const SizedBox(width: 10),
-                    if (_isCompleted)
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          decoration: BoxDecoration(
-                              color: Colors.grey.withOpacity(0.07),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                  color: Colors.grey.withOpacity(0.20))),
-                          child: Column(mainAxisSize: MainAxisSize.min, children: [
-                            Icon(Icons.lock_rounded,
-                                color: Colors.grey.shade400, size: 22),
-                            const SizedBox(height: 5),
-                            Text("Call",
-                                style: TextStyle(
-                                    color: Colors.grey.shade400,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 11)),
-                          ]),
-                        ),
-                      )
-                    else
-                      _actionBtn(
-                        Icons.phone_rounded,
-                        "Call",
-                        AppColors.primary,
-                        phone.isEmpty ? null : () => launchUrl(Uri.parse("tel:$phone")),
-                      ),
-                  ]),
-                  const SizedBox(height: 12),
-
-                  // ── Cancel button ──────────────────────────────────
-                  if (_canCancel)
-                    GestureDetector(
-                      onTap: _busy ? null : _cancel,
-                      child: Container(
-                        width: double.infinity,
-                        height: 50,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: _red.withOpacity(0.45)),
-                        ),
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.cancel_outlined, color: _red, size: 18),
-                            SizedBox(width: 8),
-                            Text("Cancel Booking",
-                                style: TextStyle(
-                                    color: _red,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 14)),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                  // ── Primary CTA ────────────────────────────────────
-                  _busy
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: CircularProgressIndicator(
-                                color: AppColors.primary),
-                          ),
-                        )
-                      : (!_notAccepted && (_isAccepted || _isConfirmed))
-                          ? _SwipeToStartButton(
-                              color: _blue,
-                              enabled: _ctaAction != null,
-                              onConfirmed: () => _ctaAction?.call(),
-                            )
-                          : GestureDetector(
-                              onTap: _ctaAction,
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                width: double.infinity,
-                                height: 56,
-                                decoration: BoxDecoration(
-                                  color: _ctaAction == null
-                                      ? Colors.grey.shade300
-                                      : _ctaColor,
-                                  borderRadius: BorderRadius.circular(16),
-                                  boxShadow: _ctaAction == null
-                                      ? []
-                                      : [
-                                          BoxShadow(
-                                              color: _ctaColor.withOpacity(0.35),
-                                              blurRadius: 14,
-                                              offset: const Offset(0, 6))
-                                        ],
-                                ),
-                                child: Center(
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        _ctaIcon,
-                                        color: _ctaAction == null
-                                            ? Colors.grey
-                                            : Colors.white,
-                                        size: 20,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _ctaLabel,
-                                        style: TextStyle(
-                                            color: _ctaAction == null
-                                                ? Colors.grey
-                                                : Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 15),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                ]),
-              ),
-            ),
-          ]),
-
-          // ── Screenshot watermark overlay (active during service) ──
-          if (_screenshotBlocked)
-            IgnorePointer(
-              child: Positioned.fill(
-                child: Container(color: Colors.transparent),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // ── Location Restricted Box (themed) ───────────────────────────
-  Widget _locationRestrictedBox({
-    required String label,
-    required String sublabel,
-  }) =>
-      Container(
-        height: 165,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(
-              color: AppColors.primary.withOpacity(0.15),
-              blurRadius: 12,
-              offset: const Offset(0, 4))],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          children: [
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: CustomPaint(painter: _GridPainter()),
-            ),
-            Positioned.fill(
-              child: CustomPaint(painter: _DiagonalStripePainter()),
-            ),
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 60,
-                    height: 60,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.35), width: 1.5),
-                    ),
-                    child: const Icon(
-                      Icons.location_off_rounded,
-                      color: Colors.white,
-                      size: 28,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.25)),
-                    ),
-                    child: Text(
-                      sublabel,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-
-  // ── Client Restricted Box (themed) ─────────────────────────────
-  Widget _clientRestrictedBox() => Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 8,
-              offset: const Offset(0, 2))],
-        ),
-        child: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.lock_rounded,
-                color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Client Details Restricted",
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      color: Colors.black87),
-                ),
-                SizedBox(height: 3),
-                Text(
-                  "Name and contact info are hidden for privacy. Contact admin if needed.",
-                  style: TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ]),
-      );
-
-  // ── Medical Documents Restricted Box (themed) ──────────────────
-  Widget _docsRestrictedBox() => Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 8,
-              offset: const Offset(0, 2))],
-        ),
-        child: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.folder_off_rounded,
-                color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Medical Documents Restricted",
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      color: Colors.black87),
-                ),
-                SizedBox(height: 3),
-                Text(
-                  "🔒  Patient documents are hidden once the service is completed.",
-                  style: TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ]),
-      );
-
-  // ── Status Stepper (redesigned) ────────────────────────────────
-  // 5 steps: Accepted → On The Way → Verified → Payment → Completed.
-  // Redesign goals vs. the old version:
-  //  • Smaller, tighter dots (30px) with icons instead of bare check
-  //    marks, so nothing overlaps/cramps on narrow phone widths.
-  //  • Connector line is a single continuous strip built with
-  //    dot/line/dot/line/dot instead of duplicated per-item lines,
-  //    so segments always align perfectly and never double up.
-  //  • The current in-progress step gets a distinct glowing ring
-  //    (blue) so it's obvious where you are, not just "done vs not".
-  //  • Labels sit in their own row below with a fixed 2-line height,
-  //    small caps-ish weight change, so "On The Way" never collides
-  //    with the neighbouring step's label.
-  Widget _statusStepper() {
-    final steps = <_StepInfo>[
-      _StepInfo("Accepted",   Icons.handshake_rounded,      !_notAccepted),
-      _StepInfo("On The Way", Icons.directions_run_rounded, _onTheWay || _isCompleted),
-      _StepInfo("Verified",   Icons.verified_user_rounded,  _otpVerified || _isCompleted),
-      _StepInfo("Payment",    Icons.payment_rounded,        _isPaid),
-      _StepInfo("Completed",  Icons.done_all_rounded,       _isCompleted),
-    ];
-
-    // Index of the first not-yet-done step = the "current" step.
-    // If everything is done, there is no current step (-1).
-    int current = steps.indexWhere((s) => !s.done);
-
-    return _card(
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: List.generate(steps.length * 2 - 1, (idx) {
-              // Even indices are dots, odd indices are connector lines.
-              if (idx.isEven) {
-                final i = idx ~/ 2;
-                return _stepDot(
-                  icon: steps[i].icon,
-                  done: steps[i].done,
-                  isCurrent: i == current,
-                );
-              } else {
-                final leftDone = steps[idx ~/ 2].done;
-                return Expanded(
-                  child: Container(
-                    height: 3,
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    decoration: BoxDecoration(
-                      color: leftDone ? AppColors.primary : Colors.grey.shade200,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                );
-              }
-            }),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: List.generate(steps.length, (i) {
-              final done      = steps[i].done;
-              final isCurrent = i == current;
-              return Expanded(
-                child: Text(
-                  steps[i].label,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    height: 1.15,
-                    fontWeight: (done || isCurrent)
-                        ? FontWeight.w700
-                        : FontWeight.w500,
-                    color: done
-                        ? AppColors.primary
-                        : isCurrent
-                            ? _blue
-                            : Colors.grey.shade500,
-                  ),
-                ),
-              );
-            }),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stepDot({
-    required IconData icon,
-    required bool done,
-    required bool isCurrent,
-  }) {
-    final ringColor = done
-        ? AppColors.primary
-        : isCurrent
-            ? _blue
-            : Colors.grey.shade300;
-
-    return Container(
-      width: 30,
-      height: 30,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: done
-            ? AppColors.primary
-            : isCurrent
-                ? _blue.withOpacity(0.12)
-                : Colors.white,
-        border: Border.all(
-          color: ringColor,
-          width: isCurrent && !done ? 2.4 : 2,
-        ),
-        boxShadow: isCurrent
-            ? [
-                BoxShadow(
-                  color: ringColor.withOpacity(0.35),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
-              ]
-            : null,
-      ),
-      child: Icon(
-        done ? Icons.check_rounded : icon,
-        color: done
-            ? Colors.white
-            : isCurrent
-                ? _blue
-                : Colors.grey.shade400,
-        size: 15,
-      ),
-    );
-  }
-
-  // ── Shared widgets ───────────────────────────────────────────
-  Widget _card({required Widget child}) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 8,
-                offset: const Offset(0, 2))]),
-        child: child,
-      );
-
-  Widget _row(
-    String label,
-    String value, {
-    bool highlight = false,
-    Color? valueColor,
-    bool isLast = false,
-  }) =>
-      Column(children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label,
-                  style: TextStyle(
-                      color: Colors.grey.shade600, fontSize: 13)),
-              const SizedBox(width: 16),
-              Flexible(
-                child: Text(
-                  value,
-                  textAlign: TextAlign.right,
-                  style: TextStyle(
-                      fontSize: highlight ? 14 : 13,
-                      fontWeight: highlight
-                          ? FontWeight.w700
-                          : FontWeight.w600,
-                      color: valueColor ??
-                          (highlight ? AppColors.primary : Colors.black87)),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (!isLast) Divider(height: 1, color: Colors.grey.shade100),
-      ]);
-
-  Widget _copyableRow(String label, String value) => Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _copyOrderCode,
-          borderRadius: BorderRadius.circular(8),
-          child: Column(children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 9),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label,
-                      style: TextStyle(
-                          color: Colors.grey.shade600, fontSize: 13)),
-                  const SizedBox(width: 16),
-                  Flexible(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            value,
-                            textAlign: TextAlign.right,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.primary),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Icon(Icons.copy_rounded,
-                            size: 15, color: AppColors.primary.withOpacity(0.7)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Divider(height: 1, color: Colors.grey.shade100),
-          ]),
-        ),
-      );
-
-  Widget _rowMultiline(String label, String value) => Column(children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label,
-                  style: TextStyle(
-                      color: Colors.grey.shade600, fontSize: 13)),
-              const SizedBox(width: 16),
-              Flexible(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: value
-                      .split(",")
-                      .map((s) => Text(
-                            "• ${s.trim()}",
-                            textAlign: TextAlign.right,
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87),
-                          ))
-                      .toList(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Divider(height: 1, color: Colors.grey.shade100),
-      ]);
-
-  Widget _actionBtn(
-    IconData icon,
-    String label,
-    Color color,
-    VoidCallback? onTap,
-  ) =>
-      Expanded(
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-                color: color.withOpacity(onTap == null ? 0.05 : 0.10),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color:
-                        color.withOpacity(onTap == null ? 0.15 : 0.30))),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(icon,
-                  color: onTap == null
-                      ? color.withOpacity(0.35)
-                      : color,
-                  size: 22),
-              const SizedBox(height: 5),
-              Text(label,
-                  style: TextStyle(
-                      color: onTap == null
-                          ? color.withOpacity(0.35)
-                          : color,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 11)),
-            ]),
-          ),
-        ),
-      );
-}
-
-// Simple immutable holder for a single step in the status stepper.
-class _StepInfo {
-  final String label;
-  final IconData icon;
-  final bool done;
-  const _StepInfo(this.label, this.icon, this.done);
-}
-
-// ════════════════════════════════════════════════════════════════
-// Swipe-to-start button (unchanged)
-// ════════════════════════════════════════════════════════════════
-
-class _SwipeToStartButton extends StatefulWidget {
-  final VoidCallback onConfirmed;
-  final Color color;
-  final String label;
-  final String confirmedLabel;
-  final IconData icon;
-  final bool enabled;
-
-  const _SwipeToStartButton({
-    required this.onConfirmed,
-    required this.color,
-    this.label = "Swipe to Start Journey",
-    this.confirmedLabel = "Journey Started",
-    this.icon = Icons.directions_run_rounded,
-    this.enabled = true,
-  });
-
-  @override
-  State<_SwipeToStartButton> createState() => _SwipeToStartButtonState();
-}
-
-class _SwipeToStartButtonState extends State<_SwipeToStartButton>
-    with TickerProviderStateMixin {
-  static const double _trackHeight = 60;
-  static const double _knobSize = 52;
-  static const double _padding = 4;
-
-  double _dragX = 0;
-  bool _confirmed = false;
-  bool _dragging = false;
-
-  late AnimationController _shimmerCtrl;
-  late AnimationController _snapCtrl;
-  late Animation<double> _snapAnim;
-
+  // ── Lifecycle ─────────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    _shimmerCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1800),
-    )..repeat();
-
-    _snapCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 260),
-    );
+    _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _fade = CurvedAnimation(parent: _anim, curve: Curves.easeOut);
+    themeNotifier.addListener(_rb);
+    _refresh();
+    _loadFeedbackFlag();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _refresh(silent: true));
   }
 
   @override
   void dispose() {
-    _shimmerCtrl.dispose();
-    _snapCtrl.dispose();
+    _timer?.cancel();
+    themeNotifier.removeListener(_rb);
+    _anim.dispose();
+    // Always release the screenshot lock when leaving this screen so it
+    // doesn't leak into the rest of the app.
+    ScreenProtector.preventScreenshotOff();
     super.dispose();
   }
 
-  double _maxDrag(double trackWidth) =>
-      trackWidth - _knobSize - _padding * 2;
+  void _rb() { if (mounted) setState(() {}); }
 
-  void _onDragUpdate(DragUpdateDetails details, double trackWidth) {
-    if (!widget.enabled || _confirmed) return;
-    final maxDrag = _maxDrag(trackWidth);
-    setState(() {
-      _dragX = (_dragX + details.delta.dx).clamp(0.0, maxDrag);
-    });
+  // ── Local "already submitted" flag (SharedPreferences fallback) ───────────────
+  String get _feedbackPrefsKey =>
+      "feedback_given_${widget.orders.first["id"]}";
+
+  Future<void> _loadFeedbackFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    final given = prefs.getBool(_feedbackPrefsKey) ?? false;
+    if (mounted) setState(() => _feedbackGiven = given);
   }
 
-  void _onDragStart() {
-    if (!widget.enabled || _confirmed) return;
-    setState(() => _dragging = true);
-    HapticFeedback.lightImpact();
-  }
-
-  void _onDragEnd(double trackWidth) {
-    if (!widget.enabled || _confirmed) return;
-    final maxDrag = _maxDrag(trackWidth);
-    setState(() => _dragging = false);
-
-    if (_dragX >= maxDrag * 0.78) {
-      _confirm(maxDrag);
-    } else {
-      _snapBack();
+  // ── Screenshot / screen-recording protection ─────────────────────────────────
+  // Enabled the instant the booking moves to ACCEPTED (and stays enabled
+  // through ON_THE_WAY / COMPLETED). Disabled while still CONFIRMED
+  // (pending) or if the booking is CANCELLED. This is purely a native-layer
+  // protection — intentionally silent, no UI copy is shown for it.
+  Future<void> _syncScreenshotProtection() async {
+    final shouldBlock = _shouldBlockScreenshot;
+    if (shouldBlock == _screenshotBlocked) return;
+    _screenshotBlocked = shouldBlock;
+    try {
+      if (shouldBlock) {
+        await ScreenProtector.preventScreenshotOn();
+      } else {
+        await ScreenProtector.preventScreenshotOff();
+      }
+    } catch (e) {
+      debugPrint("SCREENSHOT PROTECTION ERROR: $e");
     }
   }
 
-  void _confirm(double maxDrag) {
-    HapticFeedback.mediumImpact();
-    setState(() {
-      _confirmed = true;
-      _dragX = maxDrag;
-    });
-    Future.delayed(const Duration(milliseconds: 180), () {
-      widget.onConfirmed();
-    });
+  // ── OSRM Route ────────────────────────────────────────────────────────────────
+  Future<void> _loadRoute() async {
+    try {
+      final url =
+          "https://router.project-osrm.org/route/v1/driving/"
+          "${_cLng!.toStringAsFixed(6)},${_cLat!.toStringAsFixed(6)};"
+          "${_uLng!.toStringAsFixed(6)},${_uLat!.toStringAsFixed(6)}"
+          "?overview=full&geometries=geojson";
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return;
+      final data   = jsonDecode(res.body);
+      final coords = data["routes"][0]["geometry"]["coordinates"] as List;
+      final pts    = coords
+          .map((e) => LatLng((e[1] as num).toDouble(), (e[0] as num).toDouble()))
+          .toList();
+      if (mounted) setState(() => _routePoints = pts);
+    } catch (e) {
+      debugPrint("ROUTE ERROR: $e");
+    }
   }
 
-  void _snapBack() {
-    _snapAnim = Tween<double>(begin: _dragX, end: 0).animate(
-      CurvedAnimation(parent: _snapCtrl, curve: Curves.easeOutCubic),
-    )..addListener(() {
-        setState(() => _dragX = _snapAnim.value);
-      });
-    _snapCtrl.forward(from: 0);
+  Future<void> _refresh({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _loading = true);
+    final url = "${Api.baseUrl}/orders/detail/${widget.orders.first["id"]}";
+    try {
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+
+      // TEMP DEBUG — remove once the endpoint is confirmed working.
+      debugPrint("ORDER DETAIL REQUEST: $url");
+      debugPrint("ORDER DETAIL STATUS: ${res.statusCode}");
+      debugPrint("ORDER DETAIL BODY: ${res.body}");
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        if (data["order"] != null && mounted) {
+          setState(() { _live = data["order"]; _loading = false; });
+          await _syncScreenshotProtection();
+          if (_tracking) await _loadRoute();
+          if (_tracking && !_mapReady) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _mapCtrl.move(LatLng(_cLat!, _cLng!), 15);
+              _mapReady = true;
+            });
+          }
+          if (!silent) _anim.forward(from: 0);
+        }
+      }
+    } catch (e) {
+      debugPrint("ORDER DETAIL FETCH ERROR: $e");
+    }
+    if (!silent && mounted) setState(() => _loading = false);
   }
 
+  Future<void> _cancelOrder(int id, String reason) async {
+    setState(() => _cancelling = true);
+    try {
+      final res = await http.post(
+        Uri.parse("${Api.baseUrl}/orders/$id/cancel"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"reason": reason}),
+      );
+      final d = jsonDecode(res.body);
+      if (mounted) {
+        if (d["success"] == true) {
+          _showRefundSheet(d["refund"] as Map?);
+          _refresh();
+        } else {
+          _snack(d["message"] ?? "Could not cancel.", AppColors.danger);
+        }
+      }
+    } catch (_) {
+      if (mounted) _snack("Network error.", AppColors.danger);
+    }
+    if (mounted) setState(() => _cancelling = false);
+  }
+
+  void _snack(String msg, Color c) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+      backgroundColor: c,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      margin: const EdgeInsets.all(16),
+    ),
+  );
+
+  // ── Build ──────────────────────────────────────────────────────────────────────
   @override
-  Widget build(BuildContext context) {
-    final disabled = !widget.enabled;
-    final baseColor = disabled ? Colors.grey.shade300 : widget.color;
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: _bg,
+    body: Column(children: [
+      _header(),
+      Expanded(
+        child: _loading
+            ? _loadingView()
+            : RefreshIndicator(
+                color: AppColors.primary,
+                backgroundColor: _surface,
+                onRefresh: _refresh,
+                child: FadeTransition(
+                  opacity: _fade,
+                  child: SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 60),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      _sectionLabel("Booking Progress"),
+                      _progressCard(),
+                      // ✅ NEW — Service OTP, shown right after progress so
+                      // it's easy to find and hand to the caretaker.
+                      if (_showOtpCard) ...[
+                        const SizedBox(height: 20),
+                        _sectionLabel("Service OTP"),
+                        _otpCard(),
+                      ],
+                      if (_tracking) ...[
+                        const SizedBox(height: 20),
+                        _sectionLabel("Live Tracking"),
+                        _trackingCard(),
+                      ],
+                      const SizedBox(height: 20),
+                      _sectionLabel("Service Details"),
+                      _serviceCard(),
+                      const SizedBox(height: 20),
+                      _sectionLabel("Payment"),
+                      _paymentCard(),
+                      const SizedBox(height: 20),
+                      _sectionLabel("Location & Schedule"),
+                      _locationCard(),
+                      const SizedBox(height: 20),
+                      if (_cancellable) _cancelBtn(),
+                      if (!_cancellable && !_completed && !_cancelled)
+                        _blockedCancelNote(),
+                      if (_completed && _order["caretaker_id"] != null) ...[
+                        const SizedBox(height: 10),
+                        _feedbackAlreadyGiven ? _feedbackGivenBadge() : _feedbackBtn(),
+                      ],
+                    ]),
+                  ),
+                ),
+              ),
+      ),
+    ]),
+  );
 
-    return LayoutBuilder(builder: (context, constraints) {
-      final trackWidth = constraints.maxWidth;
-      final maxDrag = _maxDrag(trackWidth);
-      final progress = maxDrag <= 0 ? 0.0 : (_dragX / maxDrag).clamp(0.0, 1.0);
+  Widget _loadingView() => Center(
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(width: 44, height: 44,
+        child: CircularProgressIndicator(
+          color: AppColors.primary,
+          strokeWidth: 3,
+          backgroundColor: AppColors.primary.withOpacity(0.1),
+        ),
+      ),
+      const SizedBox(height: 14),
+      Text("Loading order…",
+          style: TextStyle(color: _subText, fontSize: 13)),
+    ]),
+  );
 
-      return GestureDetector(
-        onHorizontalDragStart: (_) => _onDragStart(),
-        onHorizontalDragUpdate: (d) => _onDragUpdate(d, trackWidth),
-        onHorizontalDragEnd: (_) => _onDragEnd(trackWidth),
-        child: Container(
-          height: _trackHeight,
-          width: double.infinity,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(_trackHeight / 2),
-            gradient: LinearGradient(
-              colors: disabled
-                  ? [Colors.grey.shade300, Colors.grey.shade300]
-                  : [
-                      baseColor.withOpacity(0.92),
-                      Color.lerp(baseColor, Colors.black, 0.18)!,
-                    ],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
+  // ── Header ────────────────────────────────────────────────────────────────────
+  Widget _header() => Container(
+    padding: EdgeInsets.only(
+      top: MediaQuery.of(context).padding.top + 16,
+      left: 16, right: 16, bottom: 26,
+    ),
+    decoration: const BoxDecoration(
+      gradient: AppColors.gradient,
+      borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+    ),
+    child: Row(children: [
+      _hBtn(Icons.chevron_left_rounded, () => Navigator.pop(context)),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text(
+            "Booking Details",
+            style: TextStyle(
+              color: Colors.white, fontSize: 21,
+              fontWeight: FontWeight.w800, letterSpacing: -0.3,
             ),
-            boxShadow: disabled
-                ? []
-                : [
-                    BoxShadow(
-                      color: baseColor.withOpacity(0.35),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
           ),
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              AnimatedContainer(
-                duration: _dragging
-                    ? Duration.zero
-                    : const Duration(milliseconds: 200),
-                margin: EdgeInsets.only(left: _padding),
-                width: _knobSize + _dragX,
-                height: _trackHeight - _padding * 2,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(_trackHeight / 2),
-                  color: Colors.white.withOpacity(0.16),
-                ),
+          const SizedBox(height: 4),
+          Row(children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 400),
+              width: 7, height: 7,
+              margin: const EdgeInsets.only(right: 7),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _cancelled
+                    ? AppColors.danger
+                    : _completed
+                        ? Colors.white
+                        : AppColors.warning,
+                boxShadow: [BoxShadow(
+                  color: (_cancelled
+                      ? AppColors.danger
+                      : _completed ? Colors.white : AppColors.warning).withOpacity(0.7),
+                  blurRadius: 8,
+                )],
               ),
-              Positioned.fill(
-                child: Center(
-                  child: Opacity(
-                    opacity: disabled ? 0.5 : (1 - progress * 1.4).clamp(0.0, 1.0),
-                    child: AnimatedBuilder(
-                      animation: _shimmerCtrl,
-                      builder: (_, __) => ShaderMask(
-                        shaderCallback: (rect) {
-                          final t = _shimmerCtrl.value;
-                          return LinearGradient(
-                            colors: const [
-                              Colors.white,
-                              Colors.white70,
-                              Colors.white,
-                            ],
-                            stops: [
-                              (t - 0.3).clamp(0.0, 1.0),
-                              t.clamp(0.0, 1.0),
-                              (t + 0.3).clamp(0.0, 1.0),
-                            ],
-                          ).createShader(rect);
-                        },
-                        child: Text(
-                          _confirmed ? widget.confirmedLabel : widget.label,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14.5,
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+            ),
+            Text(
+              _statusLabel,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.88),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
               ),
-              Positioned(
-                right: 18,
-                child: Opacity(
-                  opacity: disabled ? 0.0 : (1 - progress * 1.6).clamp(0.0, 1.0),
-                  child: Row(
-                    children: List.generate(
-                      3,
-                      (i) => Icon(
-                        Icons.chevron_right_rounded,
-                        color: Colors.white.withOpacity(0.55 - i * 0.15),
-                        size: 20,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              AnimatedContainer(
-                duration: _dragging
-                    ? Duration.zero
-                    : const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-                margin: EdgeInsets.only(left: _padding + _dragX),
-                width: _knobSize,
-                height: _knobSize,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.20),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Center(
-                  child: _confirmed
-                      ? SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.4,
-                            color: baseColor,
-                          ),
-                        )
-                      : Icon(
-                          widget.icon,
-                          color: disabled ? Colors.grey.shade400 : baseColor,
-                          size: 24,
-                        ),
-                ),
-              ),
-            ],
+            ),
+          ]),
+        ]),
+      ),
+      GestureDetector(
+        onTap: _refresh,
+        child: Container(
+          margin: const EdgeInsets.only(right: 10),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.18),
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(color: Colors.white.withOpacity(0.15)),
+          ),
+          child: const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
+        ),
+      ),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.18),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withOpacity(0.2)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 6, height: 6,
+            margin: const EdgeInsets.only(right: 5),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle, color: Color(0xFF4ADE80),
+            ),
+          ),
+          const Text("LIVE",
+              style: TextStyle(
+                color: Colors.white, fontSize: 10,
+                fontWeight: FontWeight.w800, letterSpacing: 0.8,
+              )),
+        ]),
+      ),
+    ]),
+  );
+
+  Widget _hBtn(IconData icon, VoidCallback fn) => GestureDetector(
+    onTap: fn,
+    child: Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
+      ),
+      child: Icon(icon, color: Colors.white, size: 22),
+    ),
+  );
+
+  // ── Progress Card ─────────────────────────────────────────────────────────────
+  Widget _progressCard() {
+    final steps = [
+      {"label": "Pending",    "icon": Icons.hourglass_top_rounded},
+      {"label": "Accepted",   "icon": Icons.verified_user_rounded},
+      {"label": "On The Way", "icon": Icons.electric_bike_rounded},
+      {"label": "Completed",  "icon": Icons.check_circle_rounded},
+    ];
+
+    final pillColor = _cancelled
+        ? AppColors.danger
+        : (_completed || _status == "ACCEPTED" || _status == "ON_THE_WAY")
+            ? AppColors.primary
+            : AppColors.warning;
+
+    final infoMsg = _cancelled ? null : switch (_status) {
+      "CONFIRMED"  => "Looking for a caretaker — you'll be notified soon",
+      "ACCEPTED"   => "Caretaker accepted your booking and preparing to travel",
+      "ON_THE_WAY" => "Your caretaker is currently travelling to your location",
+      "COMPLETED"  => "Service completed successfully — thank you for using Medico!",
+      _            => "Booking is active",
+    };
+
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+      // ── Status pill ──────────────────────────────────────────────────────────
+      AnimatedContainer(
+        duration: const Duration(milliseconds: 350),
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+        decoration: BoxDecoration(
+          color: pillColor.withOpacity(0.09),
+          borderRadius: BorderRadius.circular(100),
+          border: Border.all(color: pillColor.withOpacity(0.25)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          _PulseDot(color: pillColor),
+          const SizedBox(width: 8),
+          Text(_statusLabel,
+              style: TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w700,
+                color: pillColor, letterSpacing: 0.15,
+              )),
+        ]),
+      ),
+
+      const SizedBox(height: 28),
+
+      // ── Step progress — single continuous connecting line, perfectly
+      // aligned through every dot's center, so it never looks broken. ────────
+      _stepperRow(steps),
+
+      const SizedBox(height: 20),
+
+      // ── Info / cancel note ────────────────────────────────────────────────────
+      AnimatedContainer(
+        duration: const Duration(milliseconds: 350),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+        decoration: BoxDecoration(
+          color: _cancelled
+              ? AppColors.danger.withOpacity(0.04)
+              : (_dark ? Colors.white.withOpacity(0.03) : AppColors.lightBg),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _cancelled
+                ? AppColors.danger.withOpacity(0.15)
+                : AppColors.primary.withOpacity(0.08),
           ),
         ),
+        child: _cancelled
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Icon(Icons.cancel_outlined, color: AppColors.danger, size: 14),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _order["cancel_reason"]?.toString().trim().isNotEmpty == true
+                          ? "Reason: ${_order["cancel_reason"]}"
+                          : "This booking was cancelled.",
+                      style: TextStyle(
+                        color: AppColors.danger, fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ]),
+                if (_order["refund_status"] != null &&
+                    _order["refund_status"] != "NOT_ELIGIBLE") ...[
+                  const SizedBox(height: 10),
+                  _refundBadge(_order["refund_status"].toString()),
+                ],
+              ])
+            : Row(children: [
+                Icon(Icons.info_outline_rounded,
+                    size: 14, color: AppColors.primary.withOpacity(0.60)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    infoMsg ?? "",
+                    style: TextStyle(
+                      fontSize: 11.5, height: 1.45,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.primary.withOpacity(0.72),
+                    ),
+                  ),
+                ),
+              ]),
+      ),
+    ]));
+  }
+
+  // ── Stepper: a single background line + a single animated foreground line,
+  // both laid out under a Row of evenly-spaced dots so the line always meets
+  // dead-center of every dot — no matter the screen width. ─────────────────────
+  Widget _stepperRow(List<Map<String, dynamic>> steps) {
+    final n = steps.length;
+    final fraction = _cancelled ? 0.0 : _step / (n - 1);
+    const dotSize = 46.0;
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final totalWidth = constraints.maxWidth;
+      final segment    = totalWidth / n;
+      final sidePad    = segment / 2;
+      final lineWidth  = totalWidth - sidePad * 2;
+
+      return SizedBox(
+        height: 92,
+        child: Stack(children: [
+          // Background (incomplete) line
+          Positioned(
+            top: dotSize / 2 - 2,
+            left: sidePad,
+            right: sidePad,
+            child: Container(
+              height: 4,
+              decoration: BoxDecoration(
+                color: _dark ? const Color(0xFF243445) : AppColors.border,
+                borderRadius: BorderRadius.circular(100),
+              ),
+            ),
+          ),
+          // Foreground (completed) line
+          Positioned(
+            top: dotSize / 2 - 2,
+            left: sidePad,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 420),
+              curve: Curves.easeOutCubic,
+              height: 4,
+              width: lineWidth * fraction,
+              decoration: BoxDecoration(
+                gradient: _cancelled ? null : AppColors.gradient,
+                color: _cancelled ? AppColors.danger.withOpacity(0.4) : null,
+                borderRadius: BorderRadius.circular(100),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withOpacity(0.22),
+                    blurRadius: 6, offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Dots + labels
+          Row(
+            children: List.generate(n, (i) {
+              final isDone    = !_cancelled && i <= _step;
+              final isCurrent = !_cancelled && i == _step;
+
+              return Expanded(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 350),
+                    width: dotSize,
+                    height: dotSize,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: isDone ? AppColors.gradient : null,
+                      color: isDone ? null : (_dark ? const Color(0xFF1C2838) : Colors.white),
+                      border: Border.all(
+                        color: isCurrent
+                            ? AppColors.primary
+                            : (isDone
+                                ? Colors.transparent
+                                : (_dark ? const Color(0xFF31465C) : AppColors.border)),
+                        width: isCurrent ? 2.4 : 1.6,
+                      ),
+                      boxShadow: isCurrent
+                          ? [BoxShadow(
+                              color: AppColors.primary.withOpacity(0.36),
+                              blurRadius: 16, spreadRadius: 2, offset: const Offset(0, 4))]
+                          : isDone
+                              ? [BoxShadow(
+                                  color: AppColors.primary.withOpacity(0.15),
+                                  blurRadius: 8, offset: const Offset(0, 2))]
+                              : [],
+                    ),
+                    child: Icon(
+                      steps[i]["icon"] as IconData,
+                      color: isDone
+                          ? Colors.white
+                          : (_dark ? const Color(0xFF5C738A) : AppColors.muted),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    steps[i]["label"] as String,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: isDone ? FontWeight.w800 : FontWeight.w600,
+                      letterSpacing: 0.2,
+                      color: isDone
+                          ? AppColors.primary
+                          : (_dark ? const Color(0xFF5C738A) : AppColors.muted),
+                    ),
+                  ),
+                ]),
+              );
+            }),
+          ),
+        ]),
       );
     });
   }
-}
 
-// ── Enums ────────────────────────────────────────────────────────
-enum _ToastType { success, error, warn, info }
-
-// ── Cancel Bottom Sheet ──────────────────────────────────────────
-class _CancelSheet extends StatefulWidget {
-  final String orderCode;
-  final bool   isOnlinePaid;
-  final TextEditingController controller;
-  const _CancelSheet({
-    required this.orderCode,
-    required this.isOnlinePaid,
-    required this.controller,
-  });
-  @override
-  State<_CancelSheet> createState() => _CancelSheetState();
-}
-
-class _CancelSheetState extends State<_CancelSheet> {
-  static const _red   = Color(0xFFEF4444);
-  static const _amber = Color(0xFFF59E0B);
-
-  final List<String> _reasons = [
-    "Emergency / personal reason",
-    "Client unresponsive",
-    "Location too far",
-    "Health issue",
-    "Other",
-  ];
-  String? _selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      padding: EdgeInsets.fromLTRB(
-          20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 24),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
+  // ✅ NEW — Service OTP card. Big spaced-out digits, tap-to-copy, and a
+  // clear warning not to share it until the caretaker has actually arrived.
+  Widget _otpCard() {
+    final otp = _order["otp"].toString();
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
         Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2))),
-        const SizedBox(height: 20),
-
-        Row(children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-                color: _red.withOpacity(0.10),
-                borderRadius: BorderRadius.circular(10)),
-            child: const Icon(Icons.cancel_outlined, color: _red, size: 20),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            gradient: AppColors.gradient,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: AppColors.glowShadow,
           ),
-          const SizedBox(width: 12),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text("Cancel Booking",
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold)),
-            Text(widget.orderCode,
-                style: TextStyle(
-                    fontSize: 12, color: Colors.grey.shade500)),
+          child: const Icon(Icons.password_rounded, color: Colors.white, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text("Service OTP",
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: _text)),
+            const SizedBox(height: 2),
+            Text("Share this only when your caretaker arrives",
+                style: TextStyle(fontSize: 11.5, color: _subText)),
           ]),
-        ]),
-        const SizedBox(height: 16),
-
-        if (widget.isOnlinePaid)
+        ),
+        if (_otpVerified)
           Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
             decoration: BoxDecoration(
-              color: _amber.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _amber.withOpacity(0.4)),
+              color: _totalGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _totalGreen.withOpacity(0.25)),
             ),
-            child: const Row(children: [
-              Icon(Icons.warning_amber_rounded, color: _amber, size: 18),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  "Online paid booking — will be flagged for admin reassignment. Refund handled by admin.",
-                  style: TextStyle(
-                      fontSize: 12, color: Color(0xFF7B5800)),
-                ),
-              ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.check_circle_rounded, size: 12, color: _totalGreen),
+              const SizedBox(width: 4),
+              Text("Verified",
+                  style: TextStyle(fontSize: 10.5, color: _totalGreen, fontWeight: FontWeight.w800)),
             ]),
-          )
-        else
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.only(bottom: 14),
+          ),
+      ]),
+
+      const SizedBox(height: 18),
+
+      Center(
+        child: GestureDetector(
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: otp));
+            _snack("OTP copied!", AppColors.primary);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: AppColors.primary.withOpacity(0.25)),
+              gradient: AppColors.gradient,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: AppColors.glowShadow,
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              ...otp.split("").map((d) => Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 36, height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white.withOpacity(0.3)),
+                ),
+                child: Text(d,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
+              )),
+              const SizedBox(width: 8),
+              const Icon(Icons.copy_rounded, color: Colors.white70, size: 18),
+            ]),
+          ),
+        ),
+      ),
+
+      const SizedBox(height: 14),
+
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: AppColors.warning.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.warning.withOpacity(0.18)),
+        ),
+        child: Row(children: [
+          Icon(Icons.info_outline_rounded, size: 14, color: AppColors.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Don't share this over a call or chat in advance. It confirms your caretaker has physically arrived.",
+              style: TextStyle(
+                  fontSize: 11.5, height: 1.4,
+                  color: AppColors.warning, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ]),
+      ),
+    ]));
+  }
+
+  // ── Live Tracking Card ────────────────────────────────────────────────────────
+  Widget _trackingCard() {
+    final carer = LatLng(_cLat!, _cLng!);
+    final user  = LatLng(_uLat!, _uLng!);
+    final carerName = _order["caregiver_name"]?.toString().trim().isNotEmpty == true
+        ? _order["caregiver_name"].toString()
+        : "Your Caretaker";
+
+    return _card(child: Column(children: [
+
+      // ── Carer banner ─────────────────────────────────────────────────────────
+      Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: AppColors.gradient,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: AppColors.glowShadow,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              width: 50, height: 50,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
+              ),
+              child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 26),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(
+                    child: Text(carerName,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                  if (_isVerifiedCarer) ...[
+                    const SizedBox(width: 5),
+                    GestureDetector(
+                      onTap: _showVerifiedInfo,
+                      child: const Icon(Icons.verified_rounded, color: Colors.white, size: 16),
+                    ),
+                  ],
+                ]),
+                const SizedBox(height: 3),
+                const Text("is on the way to you",
+                    style: TextStyle(
+                        color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w500)),
+              ]),
+            ),
+            GestureDetector(
+              onTap: _refresh,
+              child: Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(0.25)),
+                ),
+                child: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(100),
+              border: Border.all(color: Colors.white.withOpacity(0.22)),
             ),
             child: Row(children: [
-              Icon(Icons.info_outline_rounded,
-                  color: AppColors.primary, size: 18),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  "COD / unpaid booking — will be reopened so another caretaker can accept.",
-                  style: TextStyle(
-                      fontSize: 12, color: Color(0xFF0B5E70)),
-                ),
+              Container(
+                width: 6, height: 6,
+                decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF4ADE80)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text("$_etaLabel  •  $_distLabel",
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
               ),
             ]),
           ),
+        ]),
+      ),
 
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _reasons.map((r) {
-            final sel = _selected == r;
-            return GestureDetector(
-              onTap: () => setState(() {
-                _selected = r;
-                if (r != "Other") widget.controller.text = r;
-              }),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: sel
-                      ? AppColors.primary.withOpacity(0.10)
-                      : Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: sel ? AppColors.primary : Colors.grey.shade300,
-                      width: sel ? 1.5 : 1),
-                ),
-                child: Text(r,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: sel ? AppColors.primary : Colors.grey.shade700,
-                        fontWeight: sel
-                            ? FontWeight.w600
-                            : FontWeight.normal)),
-              ),
-            );
-          }).toList(),
-        ),
-        const SizedBox(height: 14),
+      const SizedBox(height: 14),
 
-        TextField(
-          controller: widget.controller,
-          maxLines: 2,
-          style: const TextStyle(fontSize: 13),
-          decoration: InputDecoration(
-            hintText: "Add a reason (optional)…",
-            hintStyle: TextStyle(
-                color: Colors.grey.shade400, fontSize: 13),
-            filled: true,
-            fillColor: Colors.grey.shade50,
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide:
-                    BorderSide(color: Colors.grey.shade200)),
-            enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide:
-                    BorderSide(color: Colors.grey.shade200)),
-            focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.primary)),
-            contentPadding: const EdgeInsets.all(12),
-          ),
-        ),
-        const SizedBox(height: 18),
-
-        Row(children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () => Navigator.pop(context, false),
-              child: Container(
-                height: 48,
-                decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(12)),
-                child: const Center(
-                    child: Text("Keep Booking",
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87))),
-              ),
+      // ── Map (OpenStreetMap tiles) ────────────────────────────────────────────
+      ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: SizedBox(
+          height: 300,
+          child: FlutterMap(
+            mapController: _mapCtrl,
+            options: MapOptions(
+              initialCenter: carer,
+              initialZoom: 15,
+              minZoom: 3,
+              maxZoom: 19,
+              interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: GestureDetector(
-              onTap: () => Navigator.pop(context, true),
-              child: Container(
-                height: 48,
-                decoration: BoxDecoration(
-                    color: _red,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [BoxShadow(
-                        color: _red.withOpacity(0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3))]),
-                child: const Center(
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.cancel_rounded,
-                        color: Colors.white, size: 16),
-                    SizedBox(width: 6),
-                    Text("Yes, Cancel",
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700)),
+            children: [
+              TileLayer(
+                urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                userAgentPackageName: "com.medico.app",
+                maxZoom: 19,
+                tileProvider: NetworkTileProvider(),
+                errorTileCallback: (tile, error, stackTrace) =>
+                    debugPrint("MAP TILE ERROR: $error"),
+              ),
+              PolylineLayer(polylines: [
+                Polyline(
+                  points: _routePoints.isNotEmpty ? _routePoints : [carer, user],
+                  strokeWidth: 7,
+                  color: AppColors.primary,
+                  borderStrokeWidth: 2.5,
+                  borderColor: Colors.white.withOpacity(0.7),
+                ),
+              ]),
+              MarkerLayer(markers: [
+                Marker(
+                  point: carer, width: 80, height: 80,
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        gradient: AppColors.gradient,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2.5),
+                        boxShadow: AppColors.glowShadow,
+                      ),
+                      child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [BoxShadow(
+                            color: AppColors.primary.withOpacity(0.4), blurRadius: 6)],
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(
+                          carerName.split(" ").first,
+                          style: const TextStyle(
+                              fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
+                        if (_isVerifiedCarer) ...[
+                          const SizedBox(width: 3),
+                          const Icon(Icons.verified_rounded, size: 9, color: Colors.white),
+                        ],
+                      ]),
+                    ),
                   ]),
                 ),
+                Marker(
+                  point: user, width: 64, height: 64,
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2.5),
+                        boxShadow: [BoxShadow(
+                            color: AppColors.danger.withOpacity(0.4),
+                            blurRadius: 12, offset: const Offset(0, 4))],
+                      ),
+                      child: const Icon(Icons.home_rounded, color: Colors.white, size: 20),
+                    ),
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [BoxShadow(
+                            color: AppColors.danger.withOpacity(0.35), blurRadius: 6)],
+                      ),
+                      child: const Text("You",
+                          style: TextStyle(
+                              fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white)),
+                    ),
+                  ]),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+
+      const SizedBox(height: 12),
+
+      _noteRow(
+        icon: Icons.info_outline_rounded,
+        text: "Route updates every 3 seconds. Tap the refresh icon to update instantly.",
+        color: AppColors.primary,
+      ),
+    ]));
+  }
+
+  // ── Service Card ──────────────────────────────────────────────────────────────
+  Widget _serviceCard() {
+    final code = (_order["order_code"] ?? "").toString();
+    final slot = (_order["slot"]       ?? "-").toString();
+    final cat  = (_order["category"]   ?? "").toString();
+
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+      Text(_svcName,
+          style: TextStyle(
+              fontSize: 17, fontWeight: FontWeight.w800,
+              letterSpacing: -0.3, color: _text)),
+
+      const SizedBox(height: 10),
+
+      Row(children: [
+        _tag(Icons.access_time_rounded, slot),
+        if (cat.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          _tag(Icons.local_hospital_outlined, cat, outline: true),
+        ],
+      ]),
+
+      const SizedBox(height: 12),
+
+      // Order code copy
+      GestureDetector(
+        onTap: () {
+          Clipboard.setData(ClipboardData(text: code));
+          _snack("Order ID copied!", AppColors.primary);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.primary.withOpacity(0.12)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.tag_rounded, size: 14, color: AppColors.primary),
+            const SizedBox(width: 7),
+            Text(code,
+                style: const TextStyle(
+                    fontSize: 13, color: AppColors.primary,
+                    fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.copy_rounded, size: 12, color: AppColors.primary),
+                SizedBox(width: 4),
+                Text("Copy",
+                    style: TextStyle(
+                        fontSize: 11, color: AppColors.primary,
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+
+      const SizedBox(height: 16),
+      _div(),
+      const SizedBox(height: 16),
+
+      // ── Carer info — hidden once completed ───────────────────────────────────
+      if (_completed)
+        _privacyBlock()
+      else if (_hasCarer) ...[
+        Row(children: [
+          Container(
+            width: 48, height: 48,
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient, shape: BoxShape.circle,
+              boxShadow: AppColors.glowShadow,
+            ),
+            child: const Icon(Icons.person_rounded, color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(
+                  child: Text(_order["caregiver_name"].toString(),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800,
+                          letterSpacing: -0.2, color: _text)),
+                ),
+                if (_isVerifiedCarer) ...[
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: _showVerifiedInfo,
+                    child: const Icon(Icons.verified_rounded, size: 15, color: _verifiedBlue),
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 3),
+              if (_carerPhone.isNotEmpty)
+                Row(children: [
+                  Icon(Icons.phone_rounded, size: 12, color: AppColors.muted),
+                  const SizedBox(width: 4),
+                  Text(_carerPhone,
+                      style: TextStyle(fontSize: 12, color: AppColors.muted)),
+                ]),
+              const SizedBox(height: 6),
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    gradient: AppColors.gradient,
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                  child: Text(
+                    _status == "ON_THE_WAY" ? "En Route 🏍" : "Assigned",
+                    style: const TextStyle(
+                        fontSize: 10, color: Colors.white, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                if (_isVerifiedCarer) ...[
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: _showVerifiedInfo,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _verifiedBlue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: _verifiedBlue.withOpacity(0.3)),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.verified_rounded, size: 10, color: _verifiedBlue),
+                        const SizedBox(width: 3),
+                        Text("Professional",
+                            style: TextStyle(
+                                fontSize: 9.5, color: _verifiedBlue,
+                                fontWeight: FontWeight.w800)),
+                      ]),
+                    ),
+                  ),
+                ],
+              ]),
+            ]),
+          ),
+          if (_carerPhone.isNotEmpty)
+            GestureDetector(
+              onTap: () => launchUrl(Uri.parse("tel:$_carerPhone")),
+              child: Container(
+                width: 46, height: 46,
+                decoration: BoxDecoration(
+                  gradient: AppColors.gradient, shape: BoxShape.circle,
+                  boxShadow: AppColors.glowShadow,
+                ),
+                child: const Icon(Icons.call_rounded, size: 20, color: Colors.white),
+              ),
+            ),
+        ]),
+      ] else ...[
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.warning.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.warning.withOpacity(0.2)),
+          ),
+          child: Row(children: [
+            Icon(Icons.hourglass_top_rounded, color: AppColors.warning, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text("Looking for a caretaker…",
+                    style: TextStyle(
+                        color: AppColors.warning, fontSize: 13,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text("We'll notify you once someone accepts.",
+                    style: TextStyle(color: AppColors.warning, fontSize: 11.5)),
+              ]),
+            ),
+          ]),
+        ),
+      ],
+    ]));
+  }
+
+  // ── Verified caretaker info (Instagram-style tap-on-badge sheet) ─────────────
+  void _showVerifiedInfo() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        decoration: BoxDecoration(
+          color: _surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Center(child: _handle()),
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _verifiedBlue.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.verified_rounded, color: _verifiedBlue, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text("Professional (Verified) Caretaker",
+                  style: TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w800, color: _text)),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Text(
+            "This blue tick means the caretaker's identity, certifications and "
+            "background have been checked and verified by Medico, so you can "
+            "book with confidence.",
+            style: TextStyle(fontSize: 13.5, height: 1.5, color: _subText),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: AppColors.gradient,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: AppColors.glowShadow,
+              ),
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: const Text("Got it",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
             ),
           ),
         ]),
+      ),
+    );
+  }
+
+  // ── Privacy Block (shown when service is COMPLETED) ───────────────────────────
+  Widget _privacyBlock() => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: _dark
+          ? Colors.white.withOpacity(0.04)
+          : const Color(0xFFF1F5F9),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: _dark
+            ? Colors.white.withOpacity(0.08)
+            : const Color(0xFFCBD5E1),
+      ),
+    ),
+    child: Row(children: [
+      Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(
+          color: _dark
+              ? Colors.white.withOpacity(0.07)
+              : const Color(0xFFE2E8F0),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          Icons.lock_rounded,
+          color: _dark ? Colors.white38 : const Color(0xFF94A3B8),
+          size: 22,
+        ),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+            "Caretaker details hidden",
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: _dark ? Colors.white70 : const Color(0xFF475569),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            "Contact information is blocked after service completion to protect caretaker privacy.",
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.45,
+              color: _dark ? Colors.white38 : const Color(0xFF94A3B8),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ]),
+      ),
+    ]),
+  );
+
+  // ── Payment Card ──────────────────────────────────────────────────────────────
+  Widget _paymentCard() {
+    final method  = (_order["payment_method"] ?? "COD").toString();
+    final pStatus = (_order["payment_status"] ?? "PENDING").toString().toUpperCase();
+    final rStatus = (_order["refund_status"]  ?? "").toString().toUpperCase();
+    final isPaid  = pStatus == "PAID";
+    final rAmt    = num.tryParse(_order["refund_amount"]?.toString() ?? "0") ?? 0;
+
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (_hasCharge) ...[
+        _row(Icons.receipt_outlined, "Service Amount", "₹$_subtotal"),
+        _div(),
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.miscellaneous_services_rounded,
+                color: AppColors.warning, size: 18),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text("Service Charge",
+                  style: TextStyle(
+                      color: AppColors.muted, fontSize: 12,
+                      fontWeight: FontWeight.w500)),
+              const SizedBox(height: 3),
+              Row(children: [
+                Text("₹$_serviceCharge",
+                    style: TextStyle(
+                        fontSize: 14.5, fontWeight: FontWeight.w700,
+                        color: AppColors.warning)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text("Non-refundable",
+                      style: TextStyle(
+                          fontSize: 10, color: AppColors.warning,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ]),
+            ]),
+          ),
+        ]),
+        _div(),
+      ],
+
+      if (_hasDiscount) ...[
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _totalGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.local_offer_rounded,
+                color: _totalGreen, size: 18),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                  _couponCode.isNotEmpty
+                      ? "Coupon ($_couponCode)"
+                      : "Discount",
+                  style: TextStyle(
+                      color: AppColors.muted, fontSize: 12,
+                      fontWeight: FontWeight.w500)),
+              const SizedBox(height: 3),
+              Text("−₹$_discount",
+                  style: TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w700,
+                      color: _totalGreen)),
+            ]),
+          ),
+        ]),
+        _div(),
+      ],
+
+      // ── Total amount row — prominent with deep green ──────────────────────────
+      _totalRow(_hasCharge ? "Total (incl. charge)" : "Total Amount", "₹$_total"),
+
+      _div(),
+      _row(Icons.payment_outlined, "Payment Method", method),
+      _div(),
+      _row(
+        isPaid ? Icons.verified_rounded : Icons.pending_outlined,
+        "Payment Status",
+        isPaid ? "PAID" : "PENDING",
+        vc: isPaid ? AppColors.primary : AppColors.warning,
+      ),
+      if (rAmt > 0) ...[
+        _div(),
+        _row(Icons.account_balance_wallet_outlined, "Refund Amount", "₹$rAmt",
+            vc: switch (rStatus) {
+              "REFUNDED" => _totalGreen,
+              "REJECTED" => AppColors.danger,
+              _          => AppColors.warning,
+            }),
+        const SizedBox(height: 10),
+        _refundBadge(rStatus.isEmpty ? "PENDING" : rStatus),
+      ],
+    ]));
+  }
+
+  // ── Dedicated total row with stronger green treatment ─────────────────────────
+  Widget _totalRow(String label, String val) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    decoration: BoxDecoration(
+      color: _totalGreen.withOpacity(_dark ? 0.10 : 0.07),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: _totalGreen.withOpacity(0.22)),
+    ),
+    child: Row(children: [
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _totalGreen.withOpacity(0.13),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(Icons.currency_rupee_rounded, color: _totalGreen, size: 18),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: TextStyle(
+                  color: _totalGreen.withOpacity(0.75),
+                  fontSize: 12, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 3),
+          Text(val,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+                color: _totalGreen,
+              )),
+        ]),
+      ),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: _totalGreen.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _totalGreen.withOpacity(0.25)),
+        ),
+        child: Text("TOTAL",
+            style: TextStyle(
+                fontSize: 10, color: _totalGreen,
+                fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+      ),
+    ]),
+  );
+
+  // ── Location Card ─────────────────────────────────────────────────────────────
+  Widget _locationCard() => _card(child: Column(children: [
+    _row(Icons.location_on_outlined, "Service Address",
+        (_order["location"] ?? "-").toString()),
+    _div(),
+    _row(Icons.calendar_today_outlined, "Date", _fmtDate),
+    _div(),
+    _row(Icons.access_time_rounded, "Time Slot",
+        (_order["slot"] ?? "-").toString()),
+  ]));
+
+  // ── Action Buttons ────────────────────────────────────────────────────────────
+  Widget _cancelBtn() => SizedBox(
+    width: double.infinity,
+    child: OutlinedButton.icon(
+      onPressed: _cancelling ? null : _showCancelSheet,
+      icon: _cancelling
+          ? SizedBox(
+              width: 14, height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: AppColors.danger))
+          : Icon(Icons.cancel_outlined, size: 15, color: AppColors.danger),
+      label: Text("Cancel Booking",
+          style: TextStyle(
+              color: AppColors.danger,
+              fontWeight: FontWeight.w700,
+              fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        side: BorderSide(color: AppColors.danger, width: 1.5),
+      ),
+    ),
+  );
+
+  Widget _blockedCancelNote() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+    decoration: BoxDecoration(
+      color: AppColors.warning.withOpacity(0.07),
+      borderRadius: BorderRadius.circular(15),
+      border: Border.all(color: AppColors.warning.withOpacity(0.25)),
+    ),
+    child: Row(children: [
+      Icon(Icons.lock_rounded, color: AppColors.warning, size: 18),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          "Cancellation is not allowed once the caretaker is on the way.",
+          style: TextStyle(
+              color: AppColors.warning, fontSize: 12.5,
+              fontWeight: FontWeight.w600),
+        ),
+      ),
+    ]),
+  );
+
+  Widget _feedbackBtn() => DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: AppColors.gradient,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: AppColors.glowShadow,
+    ),
+    child: ElevatedButton.icon(
+      icon: const Icon(Icons.star_rounded, size: 18),
+      label: const Text("Rate & Give Feedback",
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        shadowColor: Colors.transparent,
+        elevation: 0,
+        minimumSize: const Size(double.infinity, 54),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      onPressed: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CareSeekerFeedbackScreen(
+              caregiverId:    _order["caretaker_id"]    ?? 0,
+              orderId:        _order["id"]               ?? 0,
+              orderCode:      _order["order_code"]?.toString() ?? "",
+              caregiverName:  _order["caregiver_name"]  ?? "",
+              caregiverPhone: _order["caregiver_phone"] ?? "",
+            ),
+          ),
+        );
+        // In case this screen is still on the stack when the user returns
+        // (e.g. they backed out before the success redirect completed),
+        // re-check the locally persisted flag so the button state stays correct.
+        _loadFeedbackFlag();
+      },
+    ),
+  );
+
+  // ── Shown once feedback has already been submitted for this booking ──────────
+  Widget _feedbackGivenBadge() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+    decoration: BoxDecoration(
+      color: _totalGreen.withOpacity(_dark ? 0.10 : 0.07),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: _totalGreen.withOpacity(0.22)),
+    ),
+    child: Row(children: [
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _totalGreen.withOpacity(0.14),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(Icons.check_circle_rounded, color: _totalGreen, size: 20),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text("Feedback Submitted",
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w800, color: _totalGreen)),
+          const SizedBox(height: 3),
+          Text("Thanks for rating this service.",
+              style: TextStyle(fontSize: 12, color: _subText)),
+        ]),
+      ),
+    ]),
+  );
+
+  // ── Cancel Sheet ──────────────────────────────────────────────────────────────
+  void _showCancelSheet() {
+    final ctrl   = TextEditingController();
+    final refund = _refundPreview;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+          decoration: BoxDecoration(
+            color: _surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+            Center(child: _handle()),
+
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: AppColors.danger.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.cancel_outlined, color: AppColors.danger, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Text("Cancel Booking",
+                  style: TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w800,
+                      color: AppColors.danger)),
+            ]),
+
+            const SizedBox(height: 16),
+
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: (refund["percent"] == 0
+                    ? AppColors.warning : AppColors.primary).withOpacity(0.06),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: (refund["percent"] == 0
+                      ? AppColors.warning : AppColors.primary).withOpacity(0.18),
+                ),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Icon(
+                    refund["percent"] == 100
+                        ? Icons.check_circle_outline_rounded
+                        : refund["percent"] == 50
+                            ? Icons.warning_amber_rounded
+                            : Icons.money_off_rounded,
+                    color: refund["percent"] == 0 ? AppColors.warning : AppColors.primary,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      refund["percent"] == 0
+                          ? "No Refund Applicable"
+                          : "Refund ${refund["percent"]}%  •  ₹${(refund["amount"] as double).toStringAsFixed(0)}",
+                      style: TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w800,
+                        color: refund["percent"] == 0
+                            ? AppColors.warning : AppColors.primary,
+                      ),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+                Text(refund["note"] as String,
+                    style: TextStyle(
+                        fontSize: 12.5, height: 1.4, color: _subText)),
+                if (_hasCharge) ...[
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Icon(Icons.info_outline_rounded,
+                        size: 13, color: AppColors.warning.withOpacity(0.8)),
+                    const SizedBox(width: 6),
+                    Text("Service charge ₹$_serviceCharge is non-refundable.",
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            color: AppColors.warning.withOpacity(0.9),
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                ],
+              ]),
+            ),
+
+            const SizedBox(height: 12),
+
+            GestureDetector(
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const CancellationPolicyScreen())),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+                ),
+                child: Row(children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: const Icon(Icons.policy_outlined, size: 17, color: AppColors.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text("Cancellation & Refund Policy",
+                          style: TextStyle(
+                              fontSize: 13.5, color: AppColors.primary,
+                              fontWeight: FontWeight.w700)),
+                      SizedBox(height: 2),
+                      Text("Read before confirming your cancellation",
+                          style: TextStyle(
+                              fontSize: 11, color: AppColors.primary,
+                              fontWeight: FontWeight.w400)),
+                    ]),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, color: AppColors.primary, size: 22),
+                ]),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            Text("Reason for cancellation",
+                style: TextStyle(
+                    fontWeight: FontWeight.w700, fontSize: 13, color: _subText)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              maxLines: 3,
+              autofocus: true,
+              style: TextStyle(color: _text, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: "Please tell us why you're cancelling…",
+                hintStyle: TextStyle(color: AppColors.muted, fontSize: 13),
+                filled: true,
+                fillColor: _dark ? const Color(0xFF0F172A) : AppColors.lightBg,
+                contentPadding: const EdgeInsets.all(14),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: AppColors.border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: AppColors.danger, width: 1.5)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                        color: _dark ? Colors.grey.shade700 : AppColors.border)),
+              ),
+            ),
+
+            const SizedBox(height: 18),
+
+            Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    side: BorderSide(color: AppColors.border),
+                  ),
+                  child: Text("Keep Booking",
+                      style: TextStyle(
+                          color: _subText, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
+                  ),
+                  onPressed: () {
+                    if (ctrl.text.trim().isEmpty) {
+                      _snack("Please enter a reason.", AppColors.danger);
+                      return;
+                    }
+                    Navigator.pop(context);
+                    _cancelOrder(_order["id"] as int, ctrl.text.trim());
+                  },
+                  child: const Text("Confirm Cancel",
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  // ── Refund Result Sheet ───────────────────────────────────────────────────────
+  void _showRefundSheet(Map? refund) {
+    final ok     = refund?["eligible"] == true;
+    final amount = refund?["refundAmount"] ?? 0;
+    final pct    = refund?["refundPercent"] ?? 0;
+    final note   = refund?["note"] ?? "Booking cancelled.";
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        decoration: BoxDecoration(
+          color: _surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          _handle(),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: (ok ? AppColors.primary : AppColors.muted).withOpacity(0.08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              ok ? Icons.account_balance_wallet_rounded : Icons.money_off_rounded,
+              color: ok ? AppColors.primary : AppColors.muted,
+              size: 36,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(ok ? "Refund Initiated" : "No Refund",
+              style: TextStyle(
+                  fontSize: 20, fontWeight: FontWeight.w800,
+                  color: ok ? AppColors.primary : AppColors.muted)),
+          if (ok) ...[
+            const SizedBox(height: 10),
+            Text("₹${(amount as num).toStringAsFixed(0)}",
+                style: const TextStyle(
+                    fontSize: 38, fontWeight: FontWeight.w900,
+                    color: _totalGreen)),
+            const SizedBox(height: 4),
+            Text("$pct% of service amount",
+                style: TextStyle(color: AppColors.muted, fontSize: 13)),
+          ],
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: (ok ? AppColors.primary : AppColors.warning).withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: (ok ? AppColors.primary : AppColors.warning).withOpacity(0.18),
+              ),
+            ),
+            child: Text(note.toString(),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 13.5, height: 1.5, color: _subText)),
+          ),
+          if (ok) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.info.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(children: [
+                Icon(Icons.info_outline_rounded, size: 16, color: AppColors.info),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text("Refund will be credited within 5–7 business days.",
+                      style: TextStyle(
+                          fontSize: 12, color: AppColors.info, height: 1.4)),
+                ),
+              ]),
+            ),
+          ],
+          const SizedBox(height: 20),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: AppColors.glowShadow,
+            ),
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                foregroundColor: Colors.white,
+                shadowColor: Colors.transparent,
+                elevation: 0,
+                minimumSize: const Size(double.infinity, 52),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+              child: const Text("Got it",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // ── Reusable Widgets ──────────────────────────────────────────────────────────
+  Widget _handle() => Container(
+    width: 40, height: 4,
+    margin: const EdgeInsets.only(bottom: 20),
+    decoration: BoxDecoration(
+      color: AppColors.border, borderRadius: BorderRadius.circular(2),
+    ),
+  );
+
+  Widget _card({required Widget child}) => Container(
+    decoration: BoxDecoration(
+      color: _surface,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.border.withOpacity(_dark ? 0.3 : 1), width: 1),
+      boxShadow: AppColors.cardShadow,
+    ),
+    child: Padding(padding: const EdgeInsets.all(18), child: child),
+  );
+
+  Widget _sectionLabel(String t) => Padding(
+    padding: const EdgeInsets.only(left: 2, bottom: 10),
+    child: Text(t,
+        style: TextStyle(
+            fontSize: 15, fontWeight: FontWeight.w800,
+            letterSpacing: -0.2, color: _text)),
+  );
+
+  Widget _div() => Divider(height: 24, thickness: 0.7, color: _divider);
+
+  // Small reusable "info strip" — used for the tracking tip.
+  Widget _noteRow({required IconData icon, required String text, required Color color}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.1)),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                  fontSize: 11.5, color: color.withOpacity(0.7),
+                  fontWeight: FontWeight.w500, height: 1.4),
+            ),
+          ),
+        ]),
+      );
+
+  Widget _tag(IconData icon, String label, {bool outline = false}) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: outline ? Colors.transparent : AppColors.primary.withOpacity(0.08),
+      borderRadius: BorderRadius.circular(9),
+      border: outline ? Border.all(color: AppColors.primary.withOpacity(0.2)) : null,
+    ),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 13, color: AppColors.primary),
+      const SizedBox(width: 5),
+      Text(label,
+          style: const TextStyle(
+              fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w700)),
+    ]),
+  );
+
+  Widget _row(IconData icon, String label, String val,
+      {Color? vc, bool large = false}) =>
+      Row(children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.07),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, color: AppColors.primary, size: 18),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(
+                    color: AppColors.muted, fontSize: 12,
+                    fontWeight: FontWeight.w500)),
+            const SizedBox(height: 3),
+            Text(val,
+                style: TextStyle(
+                  fontSize: large ? 18 : 14.5,
+                  fontWeight: large ? FontWeight.w800 : FontWeight.w600,
+                  letterSpacing: large ? -0.3 : 0,
+                  color: vc ?? _text,
+                )),
+          ]),
+        ),
+      ]);
+
+  Widget _refundBadge(String status) {
+    final (c, i, l) = switch (status.toUpperCase()) {
+      "PENDING"  => (AppColors.warning, Icons.hourglass_top_rounded,        "Refund Under Review"),
+      "REFUNDED" => (_totalGreen,       Icons.check_circle_outline_rounded,  "Refund Processed"),
+      "REJECTED" => (AppColors.danger,  Icons.cancel_outlined,               "Refund Rejected"),
+      _          => (AppColors.muted,   Icons.info_outline_rounded,          status),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+        color: c.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: c.withOpacity(0.25)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(i, size: 14, color: c),
+        const SizedBox(width: 6),
+        Text(l, style: TextStyle(fontSize: 12, color: c, fontWeight: FontWeight.w700)),
       ]),
     );
   }
 }
 
-// ── Grid overlay painter ─────────────────────────────────────────
-class _GridPainter extends CustomPainter {
+// ── Animated Pulse Dot ────────────────────────────────────────────────────────
+class _PulseDot extends StatefulWidget {
+  final Color color;
+  const _PulseDot({required this.color});
+
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withOpacity(0.05)
-      ..strokeWidth = 1;
-    const step = 24.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-  @override
-  bool shouldRepaint(_GridPainter old) => false;
+  State<_PulseDot> createState() => _PulseDotState();
 }
 
-// ── Diagonal stripe painter (extra restricted texture) ──────────
-class _DiagonalStripePainter extends CustomPainter {
+class _PulseDotState extends State<_PulseDot> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double>   _scale;
+
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withOpacity(0.03)
-      ..strokeWidth = 8
-      ..style = PaintingStyle.stroke;
-    const step = 32.0;
-    for (double i = -size.height; i < size.width + size.height; i += step) {
-      canvas.drawLine(
-        Offset(i, 0),
-        Offset(i + size.height, size.height),
-        paint,
-      );
-    }
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat(reverse: true);
+    _scale = Tween(begin: 0.75, end: 1.25)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
+
   @override
-  bool shouldRepaint(_DiagonalStripePainter old) => false;
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => ScaleTransition(
+    scale: _scale,
+    child: Container(
+      width: 7, height: 7,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: widget.color),
+    ),
+  );
 }

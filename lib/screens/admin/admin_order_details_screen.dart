@@ -29,6 +29,7 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   bool _otpVerified  = false;
   String? _otpVerifiedAt;
   bool _otpVisible   = false; // masked by default, admin taps to reveal
+  String? _otpError;          // set when fetch fails, shown instead of a false "not generated"
 
   @override
   void initState() {
@@ -212,24 +213,46 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     }
   }
 
-  // ✅ NEW — Fetch the Service OTP for this order (admin-only view).
+  // ✅ Fetch the Service OTP for this order (admin-only view).
   // Works regardless of order status/time — admin can check it anytime.
+  // Any failure is surfaced in _otpError instead of being swallowed, so a
+  // wrong route / auth block / bad response shape is visible in the UI
+  // instead of silently looking like "OTP not generated".
   Future<void> _fetchOtp() async {
-    setState(() => _loadingOtp = true);
+    setState(() { _loadingOtp = true; _otpError = null; });
+    final url = "${Api.baseUrl}/admin/orders/${o['id']}/otp";
     try {
-      final res = await http.get(
-          Uri.parse("${Api.baseUrl}/admin/orders/${o['id']}/otp"));
+      final res = await http.get(Uri.parse(url));
+      // ignore: avoid_print
+      print("OTP fetch → $url → ${res.statusCode} → ${res.body}");
+
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
-        final data = decoded['data'] ?? {};
+        if (decoded['success'] != true || decoded['data'] == null) {
+          setState(() => _otpError = "Unexpected response: ${res.body}");
+          return;
+        }
+        final data = decoded['data'];
         setState(() {
           _otp           = data['otp']?.toString();
-          _otpVerified   = (data['otp_verified'] == 1 || data['otp_verified'] == true);
+          _otpVerified   = (data['otp_verified'] == true || data['otp_verified'] == 1);
           _otpVerifiedAt = data['otp_verified_at']?.toString();
         });
+      } else if (res.statusCode == 404) {
+        setState(() => _otpError = "Order/route not found (404). Check that "
+            "'/admin/orders/:id/otp' is registered on the server and the "
+            "order id is correct.");
+      } else if (res.statusCode == 401 || res.statusCode == 403) {
+        setState(() => _otpError = "Not authorized (${res.statusCode}). "
+            "This endpoint may require an admin auth header/token that "
+            "wasn't sent.");
+      } else {
+        setState(() => _otpError = "Server error (${res.statusCode}): ${res.body}");
       }
-    } catch (_) {
-      // Non-critical — OTP card will just show "Unavailable".
+    } catch (e) {
+      // ignore: avoid_print
+      print("OTP fetch error → $url → $e");
+      setState(() => _otpError = "Could not reach server: $e");
     } finally {
       if (mounted) setState(() => _loadingOtp = false);
     }
@@ -718,7 +741,32 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
                 ),
               ]),
               const SizedBox(height: 14),
-              if (_otp == null || _otp!.isEmpty)
+              if (_otpError != null)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFEBEE),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFFCDD2)),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      const Icon(Icons.error_outline_rounded, color: Colors.red, size: 18),
+                      const SizedBox(width: 8),
+                      const Expanded(child: Text("Couldn't load OTP",
+                          style: TextStyle(color: Colors.red,
+                              fontWeight: FontWeight.bold, fontSize: 13))),
+                      TextButton(
+                        onPressed: _fetchOtp,
+                        child: const Text("Retry", style: TextStyle(fontSize: 12)),
+                      ),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(_otpError!,
+                        style: TextStyle(color: Colors.red[700], fontSize: 11.5)),
+                  ]),
+                )
+              else if (_otp == null || _otp!.isEmpty)
                 Row(children: [
                   Icon(Icons.info_outline_rounded, color: Colors.grey[400], size: 18),
                   const SizedBox(width: 8),

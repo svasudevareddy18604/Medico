@@ -234,6 +234,48 @@ router.get("/available-caretakers/:orderId", async (req, res) => {
 });
 
 /* =====================================================
+   ✅ NEW — GET /:id/otp
+   Admin-only view of the Service OTP for a single order.
+   Returns the OTP + verification state regardless of order
+   status/time, so admin can look it up at any point in the
+   order's lifecycle (e.g. to investigate a dispute later).
+
+   Full path once mounted in server.js: GET /api/admin/orders/:id/otp
+===================================================== */
+
+router.get("/:id/otp", async (req, res) => {
+  try {
+    const [[order]] = await db.query(
+      `SELECT id, order_code, otp, otp_verified,
+              otp_created_at, otp_verified_at, otp_used_at, otp_expired
+       FROM orders
+       WHERE id = ?`,
+      [req.params.id]
+    );
+
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found" });
+
+    return res.json({
+      success: true,
+      data: {
+        order_id:        order.id,
+        order_code:      order.order_code,
+        otp:             order.otp,
+        otp_verified:    !!order.otp_verified,
+        otp_created_at:  order.otp_created_at,
+        otp_verified_at: order.otp_verified_at,
+        otp_used_at:     order.otp_used_at,
+        otp_expired:     !!order.otp_expired,
+      },
+    });
+  } catch (err) {
+    console.error("GET /:id/otp:", err);
+    return res.status(500).json({ success: false, message: "Fetch failed" });
+  }
+});
+
+/* =====================================================
    POST /:id/assign  — ASSIGN / REASSIGN CARETAKER
    Slot conflict check before assigning
    Sets status → ACCEPTED
