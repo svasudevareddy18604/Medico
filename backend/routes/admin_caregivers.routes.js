@@ -1,7 +1,7 @@
 const express     = require("express");
 const router      = express.Router();
 const db          = require("../config/db");
-const transporter = require("../config/mailer");
+const sendMailFn  = require("../config/mailer"); // ✅ this is a function, not a transporter
 const admin       = require("../utils/firebase");
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -9,12 +9,7 @@ const admin       = require("../utils/firebase");
 ───────────────────────────────────────────────────────────────────────────── */
 const sendEmail = async (to, subject, html) => {
   try {
-    await transporter.sendMail({
-      from: `"Medico Admin" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      html,
-    });
+    await sendMailFn({ to, subject, html }); // ✅ call it the way config/mailer actually expects
   } catch (err) {
     console.error("Email Error:", err);
   }
@@ -27,7 +22,6 @@ const sendPush = async (token, title, body) => {
     console.error("FCM Error:", err);
   }
 };
-
 /* ─────────────────────────────────────────────────────────────────────────────
    SQL MIGRATION HELPER — run once on startup to add new columns if missing.
    Safe to call repeatedly (IF NOT EXISTS guards each column).
