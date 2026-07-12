@@ -102,6 +102,33 @@ router.get("/status/:userId", async (req, res) => {
 });
 
 /* ═══════════════════════════════════════════════════════════
+   GET /caretaker/session-status/:userId
+   🔥 GENERIC, ROLE-AGNOSTIC status check used by the app's
+   background SessionStatusMonitor for EVERY logged-in role —
+   care_taker, care_seeker, admin alike. Lives in this router
+   purely because it's already mounted and working; the route
+   itself doesn't care what role the user has.
+═══════════════════════════════════════════════════════════ */
+router.get("/session-status/:userId", async (req, res) => {
+  try {
+    const [[row]] = await db.query(
+      `SELECT id, role, is_blocked, is_deleted, approval_status, allow_reupload
+       FROM users
+       WHERE id = ?`,
+      [req.params.userId]
+    );
+
+    if (!row)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    res.json({ success: true, ...row });
+  } catch (err) {
+    console.error("SESSION STATUS ERROR:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
    POST /caretaker/onboarding
 ═══════════════════════════════════════════════════════════ */
 router.post("/onboarding", upload.single("profile_image"), async (req, res) => {

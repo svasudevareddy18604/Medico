@@ -51,8 +51,8 @@ class CaretakerStatusMonitor with WidgetsBindingObserver {
 
     try {
       final res = await http
-          .get(Uri.parse("${Api.baseUrl}/caretaker/status/$userId"))
-          .timeout(const Duration(seconds: 8));
+    .get(Uri.parse("${Api.baseUrl}/users/session-status/$userId"))
+    .timeout(const Duration(seconds: 8));
 
       if (res.statusCode != 200) return;
       final data = jsonDecode(res.body);
