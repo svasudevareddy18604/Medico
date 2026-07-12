@@ -7,8 +7,13 @@ apiKey.apiKey = process.env.BREVO_API_KEY;
 const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
 const sendEmail = async ({ to, subject, html }) => {
+  if (!to) {
+    console.error("❌ Email Error: no recipient email provided");
+    return;
+  }
+
   try {
-    await apiInstance.sendTransacEmail({
+    const result = await apiInstance.sendTransacEmail({
       sender: { email: "svasu18604@gmail.com" }, // temp sender
       to: [{ email: to }],
       subject: subject,
@@ -16,9 +21,15 @@ const sendEmail = async ({ to, subject, html }) => {
       textContent: `Medico OTP: ${html.replace(/<[^>]*>?/gm, '').slice(0, 200)}`
     });
 
-    console.log("✅ Email sent");
+    console.log("✅ Email sent to", to, "| messageId:", result?.messageId);
   } catch (err) {
-    console.error("❌ Email error:", err.response?.body || err.message);
+    console.error(
+      "❌ Email error to:", to,
+      "| status:", err?.status,
+      "| body:", err?.response?.body,
+      "| text:", err?.response?.text,
+      "| message:", err?.message
+    );
   }
 };
 
