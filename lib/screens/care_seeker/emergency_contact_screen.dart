@@ -193,7 +193,7 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            "This contact will be used in case of an emergency during a booking.",
+                            "This contact will be used in case of an emergency during a booking/Service.",
                             style: TextStyle(
                               fontSize: 12.5,
                               height: 1.35,

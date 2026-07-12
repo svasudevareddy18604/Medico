@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../db"); // adjust path to your mysql2 pool/connection module
+const db = require("../config/db"); // adjust path to your mysql2 pool/connection module
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/emergency-contact/:userId
