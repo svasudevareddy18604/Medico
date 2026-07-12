@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
-import '../../config/api.dart';
 import '../../utils/app_colors.dart';
 import '../../login_page.dart';
 import 'document_upload_screen.dart';
@@ -24,33 +22,21 @@ class RejectedScreen extends StatelessWidget {
     required this.allowReupload,
   });
 
-  /// 🔥 RESET STATUS → PENDING (only reachable when allowReupload = true)
-  Future<void> resetAndReupload(BuildContext context) async {
-    try {
-      final response = await http.post(
-        Uri.parse("${Api.baseUrl}/caretaker/reset-status/$userId"),
-      );
-
-      if (response.statusCode == 200) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DocumentUploadScreen(
-              userId: userId,
-              caregiverType: caregiverType,
-            ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to retry")),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Server error")),
-      );
-    }
+  /// 🔥 FIXED: just navigate to the upload screen. Do NOT touch the DB here.
+  /// The backend only flips approval_status/allow_reupload once the user
+  /// actually SUBMITS documents (see /caretaker/upload-documents route).
+  /// This means if the user backs out without submitting, they land right
+  /// back on this RejectedScreen instead of getting stuck on "Pending".
+  void _goToReupload(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DocumentUploadScreen(
+          userId: userId,
+          caregiverType: caregiverType,
+        ),
+      ),
+    );
   }
 
   void _logout(BuildContext context) {
@@ -243,7 +229,7 @@ class RejectedScreen extends StatelessWidget {
                   elevation: 0,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onPressed: () => resetAndReupload(context),
+                onPressed: () => _goToReupload(context), // ✅ fixed
                 child: const Text(
                   "Re-upload Documents",
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),

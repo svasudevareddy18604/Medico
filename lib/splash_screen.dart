@@ -77,32 +77,41 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     if (role == "admin")    { _go(AdminHomePage(userId: userId)); return; }
     if (role == "care_seeker") { _go(CareSeekerHome(userId: userId)); return; }
     if (role == "care_taker") {
-      try {
-        final res  = await http.get(Uri.parse("${Api.baseUrl}/caretaker/status/$userId"));
-        final data = jsonDecode(res.body);
-        final pc = data["profile_completed"]  ?? 0;
-        final du = data["documents_uploaded"] ?? 0;
-        final st = data["approval_status"]    ?? "pending";
-        final ct = data["caregiver_type"]     ?? "";
-        final la = data["location_added"]     ?? 0;
-        if (pc == 0) { _go(CaretakerSetupScreen(userId: userId)); return; }
-        if (du == 0) { _go(DocumentUploadScreen(userId: userId, caregiverType: ct)); return; }
-        if (st == "rejected") {
-          final allowReupload = data["allow_reupload"] == 1 || data["allow_reupload"] == true;
-          _go(RejectedScreen(
-            reason: data["reject_reason"] ?? "",
-            userId: userId,
-            caregiverType: ct,
-            allowReupload: allowReupload,
-          ));
-          return;
-        }
-        if (st == "pending")  { _go(const PendingApprovalScreen()); return; }
-        if (la == 0) { _go(AddLocationScreen(userId: userId, category: ct, onLocationAdded: () {})); return; }
-        _go(CareTakerHome(userId: userId, category: ct));
-      } catch (_) { _go(CareTakerHome(userId: userId, category: "")); }
+  try {
+    final res  = await http.get(Uri.parse("${Api.baseUrl}/caretaker/status/$userId"));
+    final data = jsonDecode(res.body);
+
+    // 🔥 Normalize — backend may return these as int (1/0), bool (true/false),
+    // or string ("1"/"0") depending on DB driver config. Never trust `== 0`
+    // or `== 1` directly on a dynamic JSON value.
+    bool truthy(dynamic v) => v == 1 || v == true || v == "1";
+
+    final pc = truthy(data["profile_completed"]);
+    final du = truthy(data["documents_uploaded"]);
+    final st = (data["approval_status"] ?? "pending").toString().trim().toLowerCase();
+    final ct = data["caregiver_type"] ?? "";
+    final la = truthy(data["location_added"]);
+
+    if (!pc) { _go(CaretakerSetupScreen(userId: userId)); return; }
+    if (!du) { _go(DocumentUploadScreen(userId: userId, caregiverType: ct)); return; }
+
+    if (st == "rejected") {
+      final allowReupload = truthy(data["allow_reupload"]);
+      _go(RejectedScreen(
+        reason: data["reject_reason"] ?? "",
+        userId: userId,
+        caregiverType: ct,
+        allowReupload: allowReupload,
+      ));
+      return;
     }
+    if (st == "pending") { _go(const PendingApprovalScreen()); return; }
+    if (!la) { _go(AddLocationScreen(userId: userId, category: ct, onLocationAdded: () {})); return; }
+    _go(CareTakerHome(userId: userId, category: ct));
+  } catch (_) {
+    _go(CareTakerHome(userId: userId, category: ""));
   }
+}}
 
   void _go(Widget page) {
     if (!mounted) return;
