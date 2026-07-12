@@ -135,7 +135,12 @@ router.post("/onboarding", upload.single("profile_image"), async (req, res) => {
 router.post("/reset-status/:userId", async (req, res) => {
   try {
     await db.query(
-      "UPDATE users SET approval_status = 'pending', reject_reason = NULL WHERE id = ?",
+      `UPDATE users
+          SET approval_status = 'pending',
+              reject_reason   = NULL,
+              allow_reupload  = 0,
+              documents_uploaded = 0
+        WHERE id = ?`,
       [req.params.userId]);
     res.json({ success: true, message: "Status reset to pending" });
   } catch (err) {
@@ -143,7 +148,6 @@ router.post("/reset-status/:userId", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/order-detail/:id
    ✅ Includes document_urls, document_types, document_keys
