@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
+import '../../login_page.dart';
 import 'pending_approval_screen.dart';
 
 class DocumentUploadScreen extends StatefulWidget {
@@ -262,7 +263,16 @@ Widget build(BuildContext context) {
             children: [
 
               GestureDetector(
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  if (Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  } else {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (_) => const LoginPage()),
+                    );
+                  }
+                },
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(

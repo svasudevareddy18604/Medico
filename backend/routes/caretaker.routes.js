@@ -148,6 +148,7 @@ router.post("/reset-status/:userId", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/order-detail/:id
    ✅ Includes document_urls, document_types, document_keys
