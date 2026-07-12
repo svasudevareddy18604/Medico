@@ -11,9 +11,7 @@ const {
   CloudinaryStorage,
 } = require("multer-storage-cloudinary");
 
-const {
-  sendPushNotification,
-} = require("../utils/notifications"); // ⚠️ adjust path to match where you saved the notification helpers
+const { sendPushNotification } = require("../services/pushNotification.service");
 
 /* =========================================
    CLOUDINARY STORAGE
