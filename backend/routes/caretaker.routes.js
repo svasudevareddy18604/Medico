@@ -147,6 +147,9 @@ router.post("/reset-status/:userId", async (req, res) => {
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/order-detail/:id
    ✅ Includes document_urls, document_types, document_keys
+   ✅ NEW: Includes emergency contact — ONLY when order is ON_THE_WAY
+      (service actively started). Hidden before (ACCEPTED/CONFIRMED)
+      and after (COMPLETED/CANCELLED) automatically, server-side.
 ═══════════════════════════════════════════════════════════ */
 router.get("/order-detail/:id", async (req, res) => {
   try {
@@ -191,7 +194,12 @@ router.get("/order-detail/:id", async (req, res) => {
         GROUP_CONCAT(
           DISTINCT bd.document_key
           SEPARATOR ','
-        ) AS document_keys
+        ) AS document_keys,
+
+        ec.name         AS emergency_name,
+        ec.relationship AS emergency_relationship,
+        ec.phone        AS emergency_phone,
+        ec.alt_phone    AS emergency_alt_phone
 
       FROM orders o
 
@@ -208,6 +216,9 @@ router.get("/order-detail/:id", async (req, res) => {
         ON bd.order_id = o.id
         AND bd.is_deleted = 0
 
+      LEFT JOIN careseeker_emergency_contact ec
+        ON ec.user_id = o.user_id
+
       WHERE o.id = ?
 
       GROUP BY o.id
@@ -215,10 +226,20 @@ router.get("/order-detail/:id", async (req, res) => {
       [req.params.id]
     );
 
-    console.log("🔥 ORDER DETAIL RESPONSE:", order);
-
     if (!order)
       return res.status(404).json({ success: false, message: "Order not found" });
+
+    // 🔒 EMERGENCY CONTACT VISIBILITY GATE
+// Only expose emergency contact once the caretaker has verified arrival OTP
+// (proves they're actually on-site), not just "started journey".
+if (order.status !== "ON_THE_WAY" || order.otp_verified !== 1) {
+  order.emergency_name         = null;
+  order.emergency_relationship = null;
+  order.emergency_phone        = null;
+  order.emergency_alt_phone    = null;
+}
+    
+    console.log("🔥 ORDER DETAIL RESPONSE:", order);
 
     return res.json({ success: true, data: order });
   } catch (err) {

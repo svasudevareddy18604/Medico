@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:medico/config/api.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
@@ -23,6 +24,7 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
   bool _loading = true;
   bool _saving = false;
   bool _hasExisting = false;
+  bool _editing = false; // ✅ NEW: false = show saved card, true = show form
 
   bool get isDark => themeNotifier.value == ThemeMode.dark;
   void _onThemeChange() { if (mounted) setState(() {}); }
@@ -59,11 +61,16 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
           _hasExisting = true;
         }
       }
-      // 404 = no contact saved yet, that's fine — leave form empty
+      // 404 = no contact saved yet — go straight to the form
     } catch (e) {
       debugPrint("EMERGENCY CONTACT LOAD ERROR: $e");
     }
-    if (mounted) setState(() => _loading = false);
+    if (mounted) {
+      setState(() {
+        _loading = false;
+        _editing = !_hasExisting; // no saved contact → open form directly
+      });
+    }
   }
 
   Future<void> _saveContact() async {
@@ -84,7 +91,10 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
       if (!mounted) return;
       if (res.statusCode == 200 || res.statusCode == 201) {
         _showToast("Emergency contact saved", success: true);
-        setState(() => _hasExisting = true);
+        setState(() {
+          _hasExisting = true;
+          _editing = false; // ✅ flip back to the saved card view
+        });
       } else {
         _showToast("Failed to save contact", success: false);
       }
@@ -93,6 +103,17 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
       if (mounted) _showToast("Something went wrong. Check your connection.", success: false);
     }
     if (mounted) setState(() => _saving = false);
+  }
+
+  Future<void> _callNumber(String phone) async {
+    final uri = Uri(scheme: "tel", path: phone);
+    try {
+      final ok = await launchUrl(uri);
+      if (!ok && mounted) _showToast("Could not open dialer", success: false);
+    } catch (e) {
+      debugPrint("CALL ERROR: $e");
+      if (mounted) _showToast("Could not open dialer", success: false);
+    }
   }
 
   void _showToast(String msg, {required bool success}) {
@@ -141,10 +162,172 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
     ),
   );
 
+  // ── Saved contact card (read-only view) ─────────────────────────────────
+
+  Widget _savedContactCard() {
+    final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final subColor = isDark ? Colors.grey.shade400 : Colors.grey.shade700;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: isDark ? Colors.grey.shade700 : Colors.grey.shade300),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 46, height: 46,
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.emergency_rounded, color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(nameController.text, style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: textColor)),
+            const SizedBox(height: 2),
+            Text(relationController.text, style: TextStyle(fontSize: 13, color: subColor)),
+          ])),
+          IconButton(
+            onPressed: () => setState(() => _editing = true),
+            icon: Icon(Icons.edit_rounded, color: AppColors.primary, size: 20),
+            tooltip: "Edit",
+          ),
+        ]),
+        const SizedBox(height: 18),
+        Divider(height: 1, color: isDark ? Colors.white12 : AppColors.border),
+        const SizedBox(height: 14),
+        _contactRow(Icons.phone_rounded, "Primary", phoneController.text, textColor, subColor),
+        if (altPhoneController.text.trim().isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _contactRow(Icons.phone_outlined, "Alternate", altPhoneController.text, textColor, subColor),
+        ],
+      ]),
+    );
+  }
+
+  Widget _contactRow(IconData icon, String label, String phone, Color textColor, Color subColor) => Row(
+    children: [
+      Icon(icon, size: 18, color: subColor),
+      const SizedBox(width: 10),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: TextStyle(fontSize: 11, color: subColor, letterSpacing: 0.3)),
+        Text(phone, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: textColor)),
+      ])),
+      GestureDetector(
+        onTap: () => _callNumber(phone),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            gradient: AppColors.gradient,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: AppColors.glowShadow,
+          ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.call_rounded, color: Colors.white, size: 15),
+            SizedBox(width: 6),
+            Text("Call", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+          ]),
+        ),
+      ),
+    ],
+  );
+
+  // ── Form (create / edit) ─────────────────────────────────────────────────
+
+  Widget _contactForm() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withOpacity(isDark ? 0.14 : 0.07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.primary.withOpacity(0.25)),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              "This contact will be used in case of an emergency during a booking/Service.",
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w500,
+                color: isDark ? Colors.grey.shade300 : Colors.grey.shade800,
+              ),
+            ),
+          ),
+        ]),
+      ),
+      const SizedBox(height: 24),
+      Form(
+        key: _formKey,
+        child: Column(children: [
+          _field(nameController, "Contact Name", Icons.person,
+              validator: (v) => v!.trim().isEmpty ? "Name is required" : null),
+          _field(relationController, "Relationship (e.g. Son, Spouse)", Icons.family_restroom,
+              validator: (v) => v!.trim().isEmpty ? "Relationship is required" : null),
+          _field(phoneController, "Phone Number", Icons.phone,
+              type: TextInputType.phone, maxLength: 10,
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return "Phone number is required";
+                if (v.trim().length != 10) return "Must be 10 digits";
+                return null;
+              }),
+          _field(altPhoneController, "Alternate Phone (optional)", Icons.phone_outlined,
+              type: TextInputType.phone, maxLength: 10),
+        ]),
+      ),
+      const SizedBox(height: 8),
+      Row(children: [
+        if (_hasExisting) ...[
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _saving ? null : () => setState(() => _editing = false),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                side: BorderSide(color: isDark ? Colors.white24 : AppColors.border),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text("Cancel", style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+            ),
+          ),
+          const SizedBox(width: 12),
+        ],
+        Expanded(
+          flex: 2,
+          child: ElevatedButton(
+            onPressed: _saving ? null : _saveContact,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: _saving
+                ? const SizedBox(
+                    height: 22, width: 22,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
+                : Text(_hasExisting ? "Update Contact" : "Save Contact",
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 40),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final bgColor = isDark ? const Color(0xFF0F172A) : Colors.grey[50]!;
-    final textColor = isDark ? Colors.white : Colors.black87;
 
     return Scaffold(
       backgroundColor: bgColor,
@@ -180,70 +363,7 @@ class _EmergencyContactScreenState extends State<EmergencyContactScreen> {
               ? const Center(child: CircularProgressIndicator())
               : SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(isDark ? 0.14 : 0.07),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.primary.withOpacity(0.25)),
-                      ),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 18),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            "This contact will be used in case of an emergency during a booking/Service.",
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              height: 1.35,
-                              fontWeight: FontWeight.w500,
-                              color: isDark ? Colors.grey.shade300 : Colors.grey.shade800,
-                            ),
-                          ),
-                        ),
-                      ]),
-                    ),
-                    const SizedBox(height: 24),
-                    Form(
-                      key: _formKey,
-                      child: Column(children: [
-                        _field(nameController, "Contact Name", Icons.person,
-                            validator: (v) => v!.trim().isEmpty ? "Name is required" : null),
-                        _field(relationController, "Relationship (e.g. Son, Spouse)", Icons.family_restroom,
-                            validator: (v) => v!.trim().isEmpty ? "Relationship is required" : null),
-                        _field(phoneController, "Phone Number", Icons.phone,
-                            type: TextInputType.phone, maxLength: 10,
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) return "Phone number is required";
-                              if (v.trim().length != 10) return "Must be 10 digits";
-                              return null;
-                            }),
-                        _field(altPhoneController, "Alternate Phone (optional)", Icons.phone_outlined,
-                            type: TextInputType.phone, maxLength: 10),
-                      ]),
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _saving ? null : _saveContact,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: _saving
-                            ? const SizedBox(
-                                height: 22, width: 22,
-                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
-                            : Text(_hasExisting ? "Update Contact" : "Save Contact",
-                                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                    const SizedBox(height: 40),
-                  ]),
+                  child: (_hasExisting && !_editing) ? _savedContactCard() : _contactForm(),
                 ),
         ),
       ]),
