@@ -14,6 +14,7 @@ import 'splash_screen.dart';
    🌗 THEME
 ================================ */
 ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
+final navigatorKey = GlobalKey<NavigatorState>(); // 🔥 ADD THIS LINE
 
 /* ===============================
    🔔 NOTIFICATION INSTANCE
@@ -175,6 +176,7 @@ class MyApp extends StatelessWidget {
       valueListenable: themeNotifier,
       builder: (context, ThemeMode mode, _) {
         return MaterialApp(
+          navigatorKey: navigatorKey,
           debugShowCheckedModeBanner: false,
           theme: lightTheme,
           darkTheme: darkTheme,

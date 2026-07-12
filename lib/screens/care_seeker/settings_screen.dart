@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'package:medico/services/caretaker_status_monitor.dart';
 import '../care_seeker/profile_screen.dart';
 import '../care_seeker/about_app_screen.dart';
 import '../care_seeker/privacy_screen.dart';
@@ -67,11 +67,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
-    if (!mounted) return;
-    Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
-  }
+  CaretakerStatusMonitor().stop(); // 🔥 ADD THIS LINE
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.clear();
+  if (!mounted) return;
+  Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
+}
 
   void _confirmLogout() => showDialog(
     context: context,
@@ -116,11 +117,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
 
       if (res.statusCode == 200) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.clear();
-        if (!mounted) return;
-        Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
-      } else {
+  CaretakerStatusMonitor().stop(); // 🔥 ADD THIS LINE
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.clear();
+  if (!mounted) return;
+  Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
+} else {
         setState(() => _deletingAccount = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Failed to delete account. Please try again.")),

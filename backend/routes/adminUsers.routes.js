@@ -87,4 +87,30 @@ const notifyUserOfBlockStatus = async (userId, isBlocked) => {
   }
 };
 
+/* ═══════════════════════════════════════════════════════════
+   GET /users/session-status/:id
+   🔥 Generic, role-agnostic status check used by the app's
+   background SessionStatusMonitor for EVERY logged-in role
+   (care_taker, care_seeker, admin). Single lightweight query —
+   no joins needed. approval_status/allow_reupload will simply
+   be null/irrelevant for non-caretaker roles, which is fine.
+═══════════════════════════════════════════════════════════ */
+router.get("/session-status/:id", async (req, res) => {
+  try {
+    const [[row]] = await db.query(
+      `SELECT id, role, is_blocked, is_deleted, approval_status, allow_reupload
+       FROM users
+       WHERE id = ?`,
+      [req.params.id]
+    );
+
+    if (!row)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    res.json({ success: true, ...row });
+  } catch (err) {
+    console.error("SESSION STATUS ERROR:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 module.exports = router; // ✅ MUST EXPORT ROUTER

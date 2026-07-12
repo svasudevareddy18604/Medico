@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
+import '../../services/caretaker_status_monitor.dart';
 import 'help_support_screen.dart';
 import 'about_app_screen.dart';
 import 'privacy_policy_screen.dart';
@@ -29,16 +29,18 @@ class CareTakerSettingsScreen extends StatelessWidget {
   ========================================================= */
 
   Future<void> _logout(BuildContext ctx) async {
-    await (await SharedPreferences.getInstance()).clear();
+  CaretakerStatusMonitor().stop(); // 🔥 ADD THIS LINE
 
-    if (!ctx.mounted) return;
+  await (await SharedPreferences.getInstance()).clear();
 
-    Navigator.pushAndRemoveUntil(
-      ctx,
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-      (_) => false,
-    );
-  }
+  if (!ctx.mounted) return;
+
+  Navigator.pushAndRemoveUntil(
+    ctx,
+    MaterialPageRoute(builder: (_) => const LoginPage()),
+    (_) => false,
+  );
+}
 
   void _confirmLogout(BuildContext ctx) {
     showDialog(

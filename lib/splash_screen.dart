@@ -15,6 +15,7 @@ import 'screens/care_taker/pending_approval_screen.dart';
 import 'screens/care_taker/add_location_screen.dart';
 import 'screens/care_taker/rejected_screen.dart';
 import 'package:medico/utils/app_colors.dart';
+import 'services/caretaker_status_monitor.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -73,11 +74,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // session is restored from SharedPreferences. Fire-and-forget: does not
     // block navigation, no await.
     syncFcmToken(userId);
+    
 
     if (role == "admin")    { _go(AdminHomePage(userId: userId)); return; }
     if (role == "care_seeker") { _go(CareSeekerHome(userId: userId)); return; }
     if (role == "care_taker") {
+  CaretakerStatusMonitor().start(userId); // 🔥 ADD THIS LINE
   try {
+    
     final res  = await http.get(Uri.parse("${Api.baseUrl}/caretaker/status/$userId"));
     final data = jsonDecode(res.body);
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../utils/app_colors.dart';
 import '../../login_page.dart';
 import 'document_upload_screen.dart';
+import '../../services/caretaker_status_monitor.dart'; // 🔥 ADD THIS LINE
 
 class RejectedScreen extends StatelessWidget {
   final String reason;
@@ -40,6 +41,7 @@ class RejectedScreen extends StatelessWidget {
   }
 
   void _logout(BuildContext context) {
+      CaretakerStatusMonitor().stop(); 
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const LoginPage()),
