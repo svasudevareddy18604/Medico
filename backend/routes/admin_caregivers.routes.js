@@ -405,7 +405,28 @@ router.post("/block/:id", async (req, res) => {
 router.post("/unblock/:id", async (req, res) => {
   const { id } = req.params;
   try {
+    const [user] = await db.query(
+      "SELECT email, first_name, fcm_token FROM users WHERE id = ?",
+      [id]
+    );
+    if (!user.length) return res.status(404).json({ success: false, message: "User not found" });
+
     await db.query("UPDATE users SET is_blocked = 0 WHERE id = ?", [id]);
+
+    await sendEmail(
+      user[0].email,
+      "Account Unblocked ✅",
+      `<h2>Account Unblocked ✅</h2>
+       <p>Dear ${user[0].first_name}, your account has been unblocked.
+       You can now use Medico as usual.</p>
+       <p><strong>Medico Team</strong></p>`
+    );
+    await sendPush(
+      user[0].fcm_token,
+      "Account Unblocked ✅",
+      "Your account has been unblocked. You can continue using Medico as usual."
+    );
+
     res.json({ success: true, message: "Caregiver unblocked successfully" });
   } catch (err) {
     console.error(err);
