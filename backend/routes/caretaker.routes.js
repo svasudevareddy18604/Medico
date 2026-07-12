@@ -81,7 +81,7 @@ router.get("/status/:userId", async (req, res) => {
   try {
     const [rows] = await db.query(`
       SELECT u.profile_completed, u.documents_uploaded, u.approval_status,
-             u.reject_reason, cp.caregiver_type
+             u.reject_reason, u.allow_reupload, cp.caregiver_type
       FROM users u
       LEFT JOIN caretaker_profiles cp ON cp.user_id = u.id
       WHERE u.id = ?`, [req.params.userId]);

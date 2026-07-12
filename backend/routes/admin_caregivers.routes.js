@@ -9,7 +9,7 @@ const admin       = require("../utils/firebase");
 ───────────────────────────────────────────────────────────────────────────── */
 const sendEmail = async (to, subject, html) => {
   try {
-    await sendMailFn({ to, subject, html }); // ✅ call it the way config/mailer actually expects
+    await sendMailFn({ to, subject, html });
   } catch (err) {
     console.error("Email Error:", err);
   }
@@ -22,9 +22,9 @@ const sendPush = async (token, title, body) => {
     console.error("FCM Error:", err);
   }
 };
+
 /* ─────────────────────────────────────────────────────────────────────────────
-   SQL MIGRATION HELPER — run once on startup to add new columns if missing.
-   Safe to call repeatedly (IF NOT EXISTS guards each column).
+   SQL MIGRATION HELPER — caretaker_profiles columns + daily status table
 ───────────────────────────────────────────────────────────────────────────── */
 const runMigrations = async () => {
   const columns = [
@@ -76,16 +76,48 @@ const runMigrations = async () => {
   console.log("✅ Caregiver availability migrations done.");
 };
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   🔥 NEW — users table migration: allow_reupload flag
+   Set alongside reject_reason. Tells the app whether the caregiver
+   is allowed to fix & re-upload documents, or must contact admin.
+───────────────────────────────────────────────────────────────────────────── */
+const runUserMigrations = async () => {
+  const columns = [
+    {
+      name: "allow_reupload",
+      sql: "ALTER TABLE users ADD COLUMN allow_reupload TINYINT(1) NOT NULL DEFAULT 0",
+    },
+  ];
+
+  for (const col of columns) {
+    const [exists] = await db.query(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'users'
+         AND COLUMN_NAME = ?`,
+      [col.name]
+    );
+
+    if (exists.length === 0) {
+      await db.query(col.sql);
+      console.log(`✅ Added column: users.${col.name}`);
+    } else {
+      console.log(`✔ Column already exists: users.${col.name}`);
+    }
+  }
+
+  console.log("✅ User migrations done.");
+};
+
 runMigrations();
+runUserMigrations();
 
 /* ─────────────────────────────────────────────────────────────────────────────
    AUTO-INACTIVE JOB — mark caregivers inactive if unavailable > 30 days.
-   Call this from a cron (e.g. node-cron daily at midnight).
-   Also exported so you can wire it up in your main server file.
 ───────────────────────────────────────────────────────────────────────────── */
 const autoInactiveJob = async () => {
   try {
-    // Find caregivers who have been unavailable for > 30 days
     const [targets] = await db.query(`
       SELECT cp.user_id, u.email, u.first_name, u.fcm_token
       FROM   caretaker_profiles cp
@@ -131,8 +163,7 @@ const autoInactiveJob = async () => {
 module.exports.autoInactiveJob = autoInactiveJob;
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   DAILY SNAPSHOT HELPER — insert/update today's row for a caregiver.
-   Call after any availability change.
+   DAILY SNAPSHOT HELPER
 ───────────────────────────────────────────────────────────────────────────── */
 const upsertDailyStatus = async (caregiverId, isAvailable) => {
   await db.query(
@@ -150,7 +181,7 @@ router.get("/", async (req, res) => {
   try {
     const [rows] = await db.query(`
       SELECT u.id, u.first_name, u.last_name, u.mobile, u.profile_image,
-             u.approval_status, u.is_blocked,
+             u.approval_status, u.is_blocked, u.reject_reason, u.allow_reupload,
              cp.is_available, cp.availability_locked,
              cp.last_available_at, cp.last_unavailable_at
       FROM   users u
@@ -166,21 +197,20 @@ router.get("/", async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   GET CAREGIVER FULL DETAILS  (includes availability + daily history)
+   GET CAREGIVER FULL DETAILS
 ───────────────────────────────────────────────────────────────────────────── */
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   try {
-    /* --- user row --- */
     const [user] = await db.query(
       `SELECT id, first_name, last_name, mobile, email, profile_image,
-              approval_status, is_blocked, fcm_token, created_at
+              approval_status, is_blocked, reject_reason, allow_reupload,
+              fcm_token, created_at
        FROM   users WHERE id = ?`,
       [id]
     );
     if (!user.length) return res.status(404).json({ success: false, message: "User not found" });
 
-    /* --- profile (with availability cols) --- */
     const [profile] = await db.query(
       `SELECT caregiver_type, services, experience, availability, profile_image,
               is_available, availability_locked, last_available_at, last_unavailable_at
@@ -188,14 +218,12 @@ router.get("/:id", async (req, res) => {
       [id]
     );
 
-    /* --- documents --- */
     const [documents] = await db.query(
       `SELECT aadhaar_front, aadhaar_back, pan_card, certificate
        FROM   caretaker_documents WHERE user_id = ?`,
       [id]
     );
 
-    /* --- job statistics --- */
     const [[stats]] = await db.query(
       `SELECT
          COUNT(*) AS total_orders,
@@ -206,7 +234,6 @@ router.get("/:id", async (req, res) => {
       [id]
     );
 
-    /* --- earnings summary --- */
     const [[earnings]] = await db.query(
       `SELECT
          IFNULL(SUM(caretaker_amount), 0)                                      AS total_earned,
@@ -217,7 +244,6 @@ router.get("/:id", async (req, res) => {
       [id]
     );
 
-    /* --- recent orders --- */
     const [recentOrders] = await db.query(
       `SELECT id, order_code, category, date, slot, total, status,
               payment_status, location, cancel_reason, created_at
@@ -226,7 +252,6 @@ router.get("/:id", async (req, res) => {
       [id]
     );
 
-    /* --- recent earnings --- */
     const [recentEarnings] = await db.query(
       `SELECT id, order_id, total_amount, commission, caretaker_amount, status, created_at
        FROM   earnings WHERE caretaker_id = ?
@@ -234,7 +259,6 @@ router.get("/:id", async (req, res) => {
       [id]
     );
 
-    /* --- daily availability history (last 30 days) --- */
     const [dailyHistory] = await db.query(
       `SELECT status_date, is_available
        FROM   caregiver_daily_status
@@ -244,7 +268,6 @@ router.get("/:id", async (req, res) => {
       [id]
     );
 
-    /* --- inactive days calculation --- */
     const prof = profile[0] || {};
     let inactiveDays = 0;
     if (!prof.is_available && prof.last_unavailable_at) {
@@ -298,7 +321,11 @@ router.post("/approve/:id", async (req, res) => {
     );
     if (!user.length) return res.status(404).json({ success: false, message: "User not found" });
 
-    await db.query("UPDATE users SET approval_status = 'approved' WHERE id = ?", [id]);
+    // ✅ clear any previous rejection flags on approval
+    await db.query(
+      "UPDATE users SET approval_status = 'approved', reject_reason = NULL, allow_reupload = 0 WHERE id = ?",
+      [id]
+    );
 
     await sendEmail(
       user[0].email,
@@ -322,13 +349,18 @@ router.post("/approve/:id", async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   REJECT
+   🔥 REJECT — now takes `reason` (category label / custom text) AND
+   `allow_reupload` (1 = caregiver can fix & re-upload docs,
+                      0 = caregiver must contact admin, no re-upload)
 ───────────────────────────────────────────────────────────────────────────── */
 router.post("/reject/:id", async (req, res) => {
   const { id } = req.params;
-  const { reason } = req.body;
+  const { reason, allow_reupload } = req.body;
+
   if (!reason?.trim())
     return res.status(400).json({ success: false, message: "Reject reason is required" });
+
+  const allowReupload = Number(allow_reupload) === 1 ? 1 : 0;
 
   try {
     const [user] = await db.query(
@@ -338,9 +370,13 @@ router.post("/reject/:id", async (req, res) => {
     if (!user.length) return res.status(404).json({ success: false, message: "User not found" });
 
     await db.query(
-      "UPDATE users SET approval_status = 'rejected', reject_reason = ? WHERE id = ?",
-      [reason, id]
+      "UPDATE users SET approval_status = 'rejected', reject_reason = ?, allow_reupload = ? WHERE id = ?",
+      [reason, allowReupload, id]
     );
+
+    const reuploadNote = allowReupload
+      ? `<p>You may correct and <strong>re-upload your documents</strong> directly from the app.</p>`
+      : `<p>This issue cannot be resolved by re-uploading documents. Please <strong>contact admin support</strong> for further assistance.</p>`;
 
     await sendEmail(
       user[0].email,
@@ -348,11 +384,23 @@ router.post("/reject/:id", async (req, res) => {
       `<h2>Account Rejected ❌</h2>
        <p>Dear ${user[0].first_name}, your account was rejected.</p>
        <p><strong>Reason:</strong> ${reason}</p>
+       ${reuploadNote}
        <p><strong>Medico Team</strong></p>`
     );
-    await sendPush(user[0].fcm_token, "Account Rejected ❌", `Reason: ${reason}`);
+    await sendPush(
+      user[0].fcm_token,
+      "Account Rejected ❌",
+      allowReupload
+        ? `Reason: ${reason}. You can re-upload your documents.`
+        : `Reason: ${reason}. Contact admin support.`
+    );
 
-    res.json({ success: true, message: "Rejected successfully" });
+    res.json({
+      success: true,
+      message: "Rejected successfully",
+      reason,
+      allow_reupload: allowReupload,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Rejection failed" });
@@ -430,14 +478,10 @@ router.post("/unblock/:id", async (req, res) => {
 
 /* ─────────────────────────────────────────────────────────────────────────────
    SET AVAILABILITY (ADMIN)
-   Admin can:
-     • Force caregiver available   → is_available=1, locked=0
-     • Force caregiver unavailable → is_available=0, locked=1
-       (caregiver must contact admin to come back online)
 ───────────────────────────────────────────────────────────────────────────── */
 router.post("/set-availability/:id", async (req, res) => {
   const { id }          = req.params;
-  const { is_available } = req.body; // 1 = available, 0 = unavailable+locked
+  const { is_available } = req.body;
 
   if (is_available === undefined)
     return res.status(400).json({ success: false, message: "is_available is required (1 or 0)" });
@@ -452,7 +496,6 @@ router.post("/set-availability/:id", async (req, res) => {
     if (!user.length) return res.status(404).json({ success: false, message: "User not found" });
 
     if (makeAvailable) {
-      // Admin re-enables the caregiver
       await db.query(
         `UPDATE caretaker_profiles
             SET is_available        = 1,
@@ -476,7 +519,6 @@ router.post("/set-availability/:id", async (req, res) => {
          <p><strong>Medico Team</strong></p>`
       );
     } else {
-      // Admin marks unavailable + locks it
       await db.query(
         `UPDATE caretaker_profiles
             SET is_available        = 0,
@@ -501,7 +543,6 @@ router.post("/set-availability/:id", async (req, res) => {
       );
     }
 
-    // Record today's snapshot
     await upsertDailyStatus(id, makeAvailable);
 
     res.json({

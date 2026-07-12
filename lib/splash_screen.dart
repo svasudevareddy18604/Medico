@@ -87,7 +87,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         final la = data["location_added"]     ?? 0;
         if (pc == 0) { _go(CaretakerSetupScreen(userId: userId)); return; }
         if (du == 0) { _go(DocumentUploadScreen(userId: userId, caregiverType: ct)); return; }
-        if (st == "rejected") { _go(RejectedScreen(reason: data["reject_reason"] ?? "", userId: userId, caregiverType: ct)); return; }
+        if (st == "rejected") {
+          final allowReupload = data["allow_reupload"] == 1 || data["allow_reupload"] == true;
+          _go(RejectedScreen(
+            reason: data["reject_reason"] ?? "",
+            userId: userId,
+            caregiverType: ct,
+            allowReupload: allowReupload,
+          ));
+          return;
+        }
         if (st == "pending")  { _go(const PendingApprovalScreen()); return; }
         if (la == 0) { _go(AddLocationScreen(userId: userId, category: ct, onLocationAdded: () {})); return; }
         _go(CareTakerHome(userId: userId, category: ct));

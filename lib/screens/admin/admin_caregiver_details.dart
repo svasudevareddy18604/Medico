@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../../config/api.dart';
 import '../../utils/app_colors.dart';
+import 'widgets/reject_caregiver_dialog.dart'; // 🔥 NEW
 
 class AdminCaregiverDetails extends StatefulWidget {
   final Map caregiver;
@@ -111,62 +112,19 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
     }
   }
 
+  /// 🔥 REJECT — now opens the categorized reason dialog.
+  /// The dialog itself calls the reject API (with reason + allow_reupload)
+  /// and returns `true` on success, so we just react to that here.
   Future<void> _reject() async {
-    final ctrl = TextEditingController();
-    final reason = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Reject Caregiver",
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 3,
-          decoration: InputDecoration(
-            hintText: "Reason for rejection...",
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide:
-                    BorderSide(color: AppColors.primary, width: 2)),
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cancel")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10))),
-            onPressed: () {
-              if (ctrl.text.trim().isNotEmpty)
-                Navigator.pop(context, ctrl.text.trim());
-            },
-            child: const Text("Reject",
-                style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+    final result = await showRejectCaregiverDialog(
+      context,
+      userId: widget.caregiver["id"],
     );
-    if (reason == null) return;
-    try {
-      final res = await http.post(
-        Uri.parse(Api.rejectCaregiver(widget.caregiver["id"])),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"reason": reason}),
-      );
-      if (res.statusCode == 200) {
-        _toast("Caregiver Rejected", isError: true);
-        await Future.delayed(const Duration(milliseconds: 900));
-        if (mounted) Navigator.pop(context, true);
-      } else {
-        _toast("Reject failed", isError: true);
-      }
-    } catch (_) {
-      _toast("Network error", isError: true);
+
+    if (result == true) {
+      _toast("Caregiver Rejected", isError: true);
+      await Future.delayed(const Duration(milliseconds: 900));
+      if (mounted) Navigator.pop(context, true);
     }
   }
 
@@ -883,9 +841,6 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
                         : Colors.red.shade700),
               ),
               const SizedBox(height: 4),
-              // FIX: wrap icon+text in Row(crossAxisAlignment: start) with
-              // Expanded around the Text so long copy wraps to a 2nd line
-              // instead of overflowing horizontally.
               if (availabilityLocked && !isAvailable)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1026,15 +981,11 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
           (row["is_available"] == 1 || row["is_available"] == true);
     }
 
-    // Build last 30 days list (newest first from API, display oldest→newest)
     final today = DateTime.now();
     final days = List.generate(
         30, (i) => today.subtract(Duration(days: 29 - i)));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // FIX: use a fixed-column GridView-like Wrap with computed cell width
-      // so the 7/8 dots-per-row layout is always consistent and never
-      // depends on parent width quirks. LayoutBuilder keeps it responsive.
       LayoutBuilder(builder: (context, constraints) {
         const int columns = 10;
         const double spacing = 5;
@@ -1083,7 +1034,6 @@ class _AdminCaregiverDetailsState extends State<AdminCaregiverDetails> {
         );
       }),
       const SizedBox(height: 10),
-      // Legend
       Wrap(spacing: 12, runSpacing: 6, children: [
         _legendDot(Colors.green.shade400, "Available"),
         _legendDot(Colors.red.shade300, "Unavailable"),
