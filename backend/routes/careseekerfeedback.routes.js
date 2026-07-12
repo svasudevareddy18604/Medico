@@ -155,6 +155,11 @@ router.get("/summary/:caregiverId", async (req, res) => {
 
 /* =========================================================
    GET CAREGIVER FULL FEEDBACK LIST
+   GET /api/feedback/:caregiverId
+   ✅ FIXED: joins `orders` so each feedback row carries the
+   real order_code (e.g. "ORD-A1B2C3") instead of just the
+   internal numeric order_id. This is what the Flutter
+   RatingsReviewsScreen reads as r["order_code"].
 ========================================================= */
 
 router.get("/:caregiverId", async (req, res) => {
@@ -164,10 +169,12 @@ router.get("/:caregiverId", async (req, res) => {
     const [rows] = await db.query(
       `SELECT 
          f.*, 
+         o.order_code,
          u.first_name, 
          u.last_name
        FROM feedback f
-       JOIN users u ON f.user_id = u.id
+       JOIN users  u ON f.user_id  = u.id
+       JOIN orders o ON f.order_id = o.id
        WHERE f.caregiver_id = ?
        ORDER BY f.created_at DESC`,
       [caregiverId]

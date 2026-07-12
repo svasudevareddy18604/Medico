@@ -1006,7 +1006,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
-              _detailsExpanded ? "Hide Full Details" : "View Full Details",
+              _detailsExpanded ? "Hide Full Details" : "View Full Booking Details",
               style: TextStyle(
                   fontSize: 14, fontWeight: FontWeight.w800, color: _text),
             ),

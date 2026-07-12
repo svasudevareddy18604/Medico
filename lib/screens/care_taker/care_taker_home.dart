@@ -703,13 +703,21 @@ class _CareTakerHomeState extends State<CareTakerHome>
                             ],
                           ),
                           const SizedBox(height: 6),
+                          // ── Overall Rating (no raw "1 reviews" / "2 reviews" count shown) ──
                           Row(children: [
                             const Icon(Icons.star, color: Colors.amber, size: 18),
                             const SizedBox(width: 4),
-                            Text(avgRating.toStringAsFixed(1)),
+                            Text(
+                              totalReviews > 0
+                                  ? avgRating.toStringAsFixed(1)
+                                  : "New",
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
                             const SizedBox(width: 6),
-                            Text("($totalReviews reviews)",
-                                style: const TextStyle(color: Colors.grey)),
+                            Text(
+                              totalReviews > 0 ? "Rating" : "No ratings yet",
+                              style: const TextStyle(color: Colors.grey),
+                            ),
                           ]),
                         ],
                       ),

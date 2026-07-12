@@ -235,13 +235,13 @@ class _RatingsReviewsScreenState extends State<RatingsReviewsScreen> {
         color: isDark ? Colors.white : Colors.black87)),
   ]);
 
-  // ─── REVIEW CARD ──────────────────────────────────────────
+  // ─── REVIEW CARD (careseeker identity hidden — booking ID shown) ──
 
   Widget _reviewCard(Map<String, dynamic> r, bool isDark) {
-    final name    = "${r["first_name"] ?? ""} ${r["last_name"] ?? ""}".trim();
-    final rating  = double.tryParse(r["rating"]?.toString() ?? "5") ?? 5.0;
-    final comment = r["feedback"] ?? "";
-    final date    = r["created_at"]?.toString() ?? "";
+    final rating   = double.tryParse(r["rating"]?.toString() ?? "5") ?? 5.0;
+    final comment  = r["feedback"] ?? "";
+    final date     = r["created_at"]?.toString() ?? "";
+    final bookingId = (r["order_code"] ?? "").toString();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -256,14 +256,20 @@ class _RatingsReviewsScreenState extends State<RatingsReviewsScreen> {
         Row(children: [
           Container(
             width: 44, height: 44,
-            decoration: const BoxDecoration(shape: BoxShape.circle),
-            child: ClipOval(child: _avatarFallback()),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.receipt_long_rounded,
+                color: AppColors.primary, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name.isNotEmpty ? name : "Anonymous",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14,
-                    color: isDark ? Colors.white : Colors.black87)),
+            Text(
+              bookingId.isNotEmpty ? "Booking $bookingId" : "Booking ID unavailable",
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14,
+                  color: isDark ? Colors.white : Colors.black87),
+            ),
             const SizedBox(height: 2),
             Text(_formatDate(date),
                 style: const TextStyle(color: AppColors.muted, fontSize: 11.5)),
@@ -278,11 +284,6 @@ class _RatingsReviewsScreenState extends State<RatingsReviewsScreen> {
       ]),
     );
   }
-
-  Widget _avatarFallback() => Container(
-    color: AppColors.primary.withOpacity(0.2),
-    child: const Icon(Icons.person_rounded, color: Colors.white, size: 22),
-  );
 
   // ─── EMPTY STATE ──────────────────────────────────────────
 
