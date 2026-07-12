@@ -23,6 +23,7 @@ const orderRoutes = require("./routes/orders.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const documentRoutes = require("./routes/document.routes");
 const careSeekerOrderDetails = require("./routes/careseekerorderdetails.routes");
+const careseekerEmergencyContactRoutes = require("./routes/careseekeremergencycontact.routes");
 
 const careseekerCouponRoutes = require("./routes/careseekercoupon.routes");
 
@@ -151,6 +152,7 @@ app.use("/api/addresses", addressRoutes);
 app.use("/api", locationCheckRoutes);
 app.use("/api/services", servicesRoutes);
 app.use("/api/feedback", feedbackRoutes);
+app.use("/api/emergency-contact", careseekerEmergencyContactRoutes);
 
 /* =========================================
    CARETAKERS

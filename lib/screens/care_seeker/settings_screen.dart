@@ -10,6 +10,8 @@ import '../care_seeker/privacy_screen.dart';
 import '../care_seeker/terms_conditions.dart';
 import '../care_seeker/helpcenter_screen.dart';
 import '../care_seeker/livechat_screen.dart';
+import '../care_seeker/careseeker_location.dart';
+import '../care_seeker/emergency_contact_screen.dart';
 import 'package:medico/config/api.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
@@ -27,8 +29,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isDarkMode = false;
   bool _loading = true;
   bool _deletingAccount = false;
-  bool _dangerZoneExpanded = false; // ✅ NEW: danger zone hidden by default
+  bool _dangerZoneExpanded = false;
   Map<String, dynamic>? _userData;
+
+  static const String _appVersion = "1.0.0"; // ✅ NEW: bump manually per release
 
   @override
   void initState() {
@@ -39,7 +43,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadProfile() async {
     try {
-      // ✅ FIXED: Api.baseUrl already includes /api — don't add it again
       final res = await http.get(Uri.parse("${Api.baseUrl}/users/profile/${widget.userId}"));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
@@ -133,8 +136,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  /// ✅ NEW: Requires the user to type DELETE before the button even activates.
-  /// This makes an accidental / rushed tap essentially impossible.
   void _confirmDeleteAccount() {
     final TextEditingController controller = TextEditingController();
     bool canDelete = false;
@@ -236,7 +237,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String get _lastName  => (_userData?["last_name"]  ?? "Seeker").toString();
   String get _email     => (_userData?["email"]      ?? "").toString();
 
-  /// Returns full image URL. Prepends imageBase if path is relative.
   String get _profileImageUrl {
     final raw = (_userData?["profile_image"] ?? "").toString().trim();
     if (raw.isEmpty) return "";
@@ -264,6 +264,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _section("ACCOUNT", isDark, [
               _tile(Icons.person_rounded, "My Profile",
                   () => _go(ProfileScreen(userId: widget.userId)), isDark),
+              Divider(height: 1, color: AppColors.border),
+              _tile(Icons.location_on_rounded, "Saved Addresses",
+                  () => _go(CareSeekerLocation(userId: widget.userId)), isDark),
+              Divider(height: 1, color: AppColors.border),
+              _tile(Icons.emergency_rounded, "Emergency Contact",
+                  () => _go(EmergencyContactScreen(userId: widget.userId)), isDark),
             ]),
             _section("PREFERENCES", isDark, [
               _toggleTile(Icons.notifications_rounded, "Notifications",
@@ -292,8 +298,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   () => _go(const TermsConditionsScreen()), isDark),
             ]),
             _logoutCard(isDark),
-            // ✅ NEW: generous breathing room + a visual divider so Danger Zone
-            // no longer sits flush under Logout where thumbs land after tapping it.
             const SizedBox(height: 36),
             Row(children: [
               Expanded(child: Divider(color: isDark ? Colors.white12 : AppColors.border)),
@@ -311,6 +315,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
             const SizedBox(height: 14),
             _dangerZone(isDark),
+            const SizedBox(height: 28),
+            _versionFooter(isDark), // ✅ NEW
           ],
         )),
       ]),
@@ -354,7 +360,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       boxShadow: AppColors.glowShadow,
     ),
     child: Row(children: [
-      // ── Avatar ──
       GestureDetector(
         onTap: () => _go(ProfileScreen(userId: widget.userId)),
         child: Container(
@@ -367,7 +372,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
       const SizedBox(width: 16),
-      // ── Name + subtitle ──
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _loading
             ? Container(
@@ -389,7 +393,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
                 overflow: TextOverflow.ellipsis),
       ])),
-      // ── Edit button ──
       GestureDetector(
         onTap: () => _go(ProfileScreen(userId: widget.userId)),
         child: Container(
@@ -404,7 +407,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ]),
   );
 
-  /// Builds the avatar widget: loading shimmer → network image → fallback icon.
   Widget _buildAvatar() {
     if (_loading) {
       return Container(
@@ -421,7 +423,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Image.network(
       url,
       fit: BoxFit.cover,
-      // Show spinner while loading network image
       loadingBuilder: (_, child, progress) => progress == null
           ? child
           : Container(
@@ -429,7 +430,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Center(
                 child: SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)))),
-      // Show fallback on error
       errorBuilder: (_, __, ___) => _avatarFallback(),
     );
   }
@@ -539,9 +539,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   );
 
   // ── Danger zone ───────────────────────────────────────────────────────────
-  // ✅ NEW IDEA: collapsed by default. User must explicitly tap "Show" to even
-  // reveal the Delete Account row — so it's physically impossible to hit it
-  // by mistake right after tapping Logout above.
 
   Widget _dangerZone(bool isDark) => Container(
     decoration: BoxDecoration(
@@ -623,6 +620,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : const SizedBox(width: double.infinity, height: 0),
       ),
     ]),
+  );
+
+  // ── Version footer ───────────────────────────────────────────────────────
+  // ✅ NEW: simple centered app version, useful for support/debugging.
+
+  Widget _versionFooter(bool isDark) => Center(
+    child: Text(
+      "Medico  •  v$_appVersion",
+      style: TextStyle(
+        fontSize: 11.5,
+        letterSpacing: 0.4,
+        fontWeight: FontWeight.w500,
+        color: isDark ? Colors.white24 : AppColors.muted,
+      ),
+    ),
   );
 }
 

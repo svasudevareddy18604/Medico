@@ -76,6 +76,10 @@ class Api {
   static const String verifyPayment   = "$baseUrl/payment/verify";
   static const String codNotification = "$baseUrl/payment/cod-notification";
 
+  /* ================= EMERGENCY CONTACT ================= */
+  static String getEmergencyContact(int userId) => "$baseUrl/emergency-contact/$userId";
+  static const String saveEmergencyContact = "$baseUrl/emergency-contact/save";
+
   /* ================= ADMIN ORDERS ================= */
 
   static const String adminOrders = "$baseUrl/admin/orders";

@@ -169,15 +169,25 @@ class _AddLocationScreenState extends State<AddLocationScreen> {
       if (res.statusCode == 200) {
         widget.onLocationAdded();
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => CareTakerHome(
-              userId: widget.userId,
-              category: widget.category,
+        if (!mounted) return;
+
+        // If Home already exists in the stack (opened from Home to UPDATE
+        // address), just pop back so it refreshes in place.
+        // If there's nothing to pop to (first-time onboarding flow, no
+        // Home pushed yet), fall back to pushReplacement.
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context, true);
+        } else {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CareTakerHome(
+                userId: widget.userId,
+                category: widget.category,
+              ),
             ),
-          ),
-        );
+          );
+        }
       } else {
         showMsg("Save failed");
       }

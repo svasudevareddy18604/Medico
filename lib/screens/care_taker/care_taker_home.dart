@@ -11,6 +11,7 @@ import 'my_jobs_screen.dart';
 import 'caretaker_settings_screen.dart';
 import 'caretaker_profile_screen.dart';
 import 'caretaker_earnings_screen.dart';
+import 'add_location_screen.dart';
 
 class CareTakerHome extends StatefulWidget {
   final int userId;
@@ -25,6 +26,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
     with SingleTickerProviderStateMixin {
   int currentIndex = 0;
   String addressText = "Fetching address...";
+  bool hasAddress = false;
   late String caretakerCategory;
   Timer? timer;
 
@@ -144,19 +146,72 @@ class _CareTakerHomeState extends State<CareTakerHome>
     }
   }
 
+  // ── Address: fetches caretaker's default location and reflects it in the
+  //    header. Falls back to a friendly "tap to add" prompt if none is set,
+  //    and is safe to call again any time (e.g. after returning from the
+  //    Add/Update Location screen) to keep the header in sync. ──────────────
   Future<void> loadAddress() async {
     try {
       final res = await http.get(
           Uri.parse("${Api.baseUrl}/caretaker/location/default/${widget.userId}"));
+
+      if (res.statusCode == 404) {
+        if (mounted) {
+          setState(() {
+            hasAddress = false;
+            addressText = "Add your location";
+          });
+        }
+        return;
+      }
+
       final data = jsonDecode(res.body);
       if (data["success"] == true && data["address"] != null) {
         final addr = data["address"];
+        final parts = [
+          addr["address_line"],
+          addr["area"],
+          addr["pincode"],
+        ].where((p) => p != null && p.toString().trim().isNotEmpty).join(", ");
+
         if (mounted) {
-          setState(() => addressText =
-              "${addr["address_line"]}, ${addr["area"]}, ${addr["pincode"]}");
+          setState(() {
+            hasAddress = parts.isNotEmpty;
+            addressText = parts.isNotEmpty ? parts : "Add your location";
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            hasAddress = false;
+            addressText = "Add your location";
+          });
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted && !hasAddress) {
+        setState(() => addressText = "Add your location");
+      }
+    }
+  }
+
+  // Opens the Add/Update Location screen and refreshes the header address
+  // automatically once the user comes back (whether they saved a new
+  // address or just backed out).
+  Future<void> _openLocationScreen() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddLocationScreen(
+          userId: widget.userId,
+          category: caretakerCategory,
+          onLocationAdded: loadAddress,
+        ),
+      ),
+    );
+    // Safety-net refresh in case onLocationAdded wasn't triggered
+    // (e.g. user just backed out without saving — harmless no-op then).
+    loadAddress();
   }
 
   // ─────────────────────────────── TOGGLE ────────────────────────────────────
@@ -428,15 +483,36 @@ class _CareTakerHomeState extends State<CareTakerHome>
           ),
           if (showLocation) ...[
             const SizedBox(height: 12),
-            Row(children: [
-              const Icon(Icons.location_on, color: Colors.white),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(addressText,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white)),
+            GestureDetector(
+              onTap: _openLocationScreen,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(children: [
+                  Icon(
+                    hasAddress ? Icons.location_on_rounded : Icons.add_location_alt_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(addressText,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(Icons.chevron_right_rounded,
+                      color: Colors.white.withOpacity(0.9), size: 18),
+                ]),
               ),
-            ]),
+            ),
           ],
         ],
       ),
@@ -659,7 +735,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
           child: RefreshIndicator(
             color: AppColors.primary,
             onRefresh: () async {
-              await Future.wait([loadEarnings(), loadRating(), loadProfile()]);
+              await Future.wait([loadEarnings(), loadRating(), loadProfile(), loadAddress()]);
             },
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -772,6 +848,8 @@ class _CareTakerHomeState extends State<CareTakerHome>
                       () => setState(() => currentIndex = 1)),
                   _actionCard(Icons.assignment, "My Services",
                       () => setState(() => currentIndex = 2)),
+                  _actionCard(Icons.edit_location_alt_rounded, "Update Location",
+                      _openLocationScreen),
 
                   const SizedBox(height: 8),
                 ],
