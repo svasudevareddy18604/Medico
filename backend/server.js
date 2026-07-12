@@ -16,6 +16,7 @@ const locationCheckRoutes = require("./routes/locationCheck.routes");
 const servicesRoutes = require("./routes/services.routes");
 const nearbyCaretakersRoutes = require("./routes/nearbyCaretakers.routes");
 const feedbackRoutes = require("./routes/careseekerfeedback.routes");
+const notifyUserTermsRoutes = require("./routes/notifyUserTerms.routes");
 
 const cartRoutes = require("./routes/cart.routes");
 const slotRoutes = require("./routes/slots.routes");
@@ -247,6 +248,8 @@ app.use("/api/admin/users", adminUsersRoutes);
 app.use("/api/admin/orders", adminOrdersRoutes);
 
 app.use("/api/admin/services", adminServicesRoutes);
+
+app.use("/api/admin", notifyUserTermsRoutes);
 
 app.use(
   "/api/admin/service-charges",

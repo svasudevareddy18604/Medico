@@ -11,6 +11,7 @@ import 'admin_promotion_screen.dart';
 import 'admin_coupon_screen.dart';
 import 'service_charges_screen.dart';
 import 'location_control_screen.dart';
+import 'admin_terms_conditions_screen.dart'; // NEW
 
 class AdminSettings extends StatelessWidget {
   const AdminSettings({super.key});
@@ -32,6 +33,8 @@ class AdminSettings extends StatelessWidget {
           "Manage offers & discounts", () => _go(context, const AdminPromotionScreen())),
       _Item(Icons.currency_rupee_rounded, Colors.indigo, "Service Charges",
           "Configure charge settings", () => _go(context, const ServiceChargesScreen())),
+      _Item(Icons.gavel_rounded, Colors.brown, "Terms & Conditions",
+          "Update terms & notify users", () => _go(context, const AdminTermsConditionsScreen())), // NEW
       _Item(Icons.logout_rounded, Colors.red, "Logout",
           "Sign out of your account", () => _logout(context), isLogout: true),
     ];
