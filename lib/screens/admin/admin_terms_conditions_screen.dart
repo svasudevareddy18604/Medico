@@ -3,9 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../../utils/app_colors.dart';
-
-// TODO: replace with your actual base URL constant (e.g. ApiConfig.baseUrl)
-const String _baseUrl = "https://YOUR-RENDER-APP.onrender.com";
+import '../../config/api.dart'; // adjust path to wherever your Api class lives
 
 enum TermsAudience { both, careseekers, caretakers }
 
@@ -27,7 +25,7 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
     setState(() => _sending = true);
     try {
       final res = await http.post(
-        Uri.parse("$_baseUrl/api/admin/notify-terms-update"),
+        Uri.parse(Api.notifyTermsUpdate),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"audience": _audience.name}),
       );

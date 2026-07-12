@@ -94,6 +94,10 @@ class Api {
   static String blockUser(int id)       => "$baseUrl/admin/users/block/$id";
   static String careSeekerDetails(int id) => "$baseUrl/admin/careseeker/$id/details";
 
+  /* ================= TERMS & CONDITIONS ================= */
+
+  static const String notifyTermsUpdate = "$baseUrl/admin/notify-terms-update";
+
   /* ================= ADMIN CAREGIVERS ================= */
 
   static const String adminCaregivers    = "$baseUrl/admin/caregivers";

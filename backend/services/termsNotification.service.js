@@ -4,6 +4,7 @@ const { sendPushNotification } = require("./pushNotification.service");
 
 /* ─────────────────────────────────────────
    PROFESSIONAL EMAIL TEMPLATE
+   Compact, scannable, easy to read in seconds
 ───────────────────────────────────────── */
 
 const emailTemplate = ({ title, subtitle, content, statusColor = "#4f46e5" }) => {
@@ -21,59 +22,78 @@ const emailTemplate = ({ title, subtitle, content, statusColor = "#4f46e5" }) =>
     margin:0;
     padding:0;
     background:#f3f4f6;
-    font-family:Arial,sans-serif;
+    font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
   ">
 
     <table width="100%" cellpadding="0" cellspacing="0" style="
       background:#f3f4f6;
-      padding:20px 10px;
+      padding:24px 12px;
     ">
 
       <tr>
         <td align="center">
 
           <table width="100%" cellpadding="0" cellspacing="0" style="
-            max-width:650px;
+            max-width:480px;
             background:#ffffff;
-            border-radius:16px;
+            border-radius:14px;
             overflow:hidden;
-            box-shadow:0 4px 20px rgba(0,0,0,0.08);
+            box-shadow:0 2px 10px rgba(0,0,0,0.06);
           ">
 
+            <!-- HEADER -->
             <tr>
               <td style="
                 background:${statusColor};
-                padding:35px 25px;
+                padding:24px 24px;
                 text-align:center;
               ">
-                <h1 style="color:white;margin:0;font-size:28px;">Medico</h1>
-                <p style="color:#e5e7eb;margin-top:10px;font-size:15px;">${subtitle}</p>
+                <p style="
+                  color:#ffffff;
+                  margin:0;
+                  font-size:17px;
+                  font-weight:700;
+                  letter-spacing:0.3px;
+                ">
+                  Medico
+                </p>
+                <p style="
+                  color:rgba(255,255,255,0.85);
+                  margin:6px 0 0;
+                  font-size:12.5px;
+                  font-weight:400;
+                ">
+                  ${subtitle}
+                </p>
               </td>
             </tr>
 
+            <!-- BODY -->
             <tr>
               <td style="
-                padding:35px 25px;
-                color:#111827;
-                font-size:15px;
-                line-height:1.8;
+                padding:22px 24px 24px;
+                color:#1f2937;
+                font-size:13px;
+                line-height:1.55;
               ">
                 ${content}
               </td>
             </tr>
 
+            <!-- FOOTER -->
             <tr>
               <td style="
                 background:#f9fafb;
-                padding:20px;
+                padding:14px 24px;
                 text-align:center;
-                border-top:1px solid #e5e7eb;
+                border-top:1px solid #eef0f2;
               ">
-                <p style="margin:0;color:#6b7280;font-size:13px;">
-                  © ${new Date().getFullYear()} Medico
-                </p>
-                <p style="margin-top:8px;color:#9ca3af;font-size:12px;">
-                  Professional Home Healthcare Services
+                <p style="
+                  margin:0;
+                  color:#9ca3af;
+                  font-size:10.5px;
+                ">
+                  © ${new Date().getFullYear()} Medico · Professional Home Healthcare Services
                 </p>
               </td>
             </tr>
@@ -145,30 +165,57 @@ const sendTermsUpdateNotifications = async (audience) => {
         await sendEmail({
           to: u.email,
 
-          subject: "📋 Terms & Conditions Updated - Medico",
+          subject: "Update to Medico's Terms & Conditions",
 
           html: emailTemplate({
             title: "Terms & Conditions Updated",
-            subtitle: "Please review our updated policies",
+            subtitle: "A quick update on our policies",
             statusColor: "#4f46e5",
 
             content: `
-              <p>Hello <b>${u.first_name || "there"}</b>,</p>
-
-              <p>
-                We've made updates to our Terms & Conditions to keep you
-                informed about how Medico's services work and how your
-                information is handled.
+              <p style="margin:0 0 12px;">
+                Hi <b>${u.first_name || "there"}</b>,
               </p>
 
-              <p>
-                We recommend reviewing the updated terms at your earliest
-                convenience. Continued use of Medico after this notice
-                means you accept the revised terms.
+              <p style="margin:0 0 14px;">
+                We've updated our <b>Terms & Conditions</b>. Here's what you need to know:
               </p>
 
-              <p style="margin-top:25px;color:#374151;">
-                Thank you for being a part of the Medico community.
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+                <tr>
+                  <td style="padding:6px 0; font-size:13px; vertical-align:top; width:20px;">•</td>
+                  <td style="padding:6px 0; font-size:13px; color:#374151;">
+                    Reflects the latest changes to how our services work
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0; font-size:13px; vertical-align:top;">•</td>
+                  <td style="padding:6px 0; font-size:13px; color:#374151;">
+                    Clarifies how your information is used and protected
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0; font-size:13px; vertical-align:top;">•</td>
+                  <td style="padding:6px 0; font-size:13px; color:#374151;">
+                    Takes effect immediately
+                  </td>
+                </tr>
+              </table>
+
+              <p style="
+                margin:0 0 16px;
+                padding:10px 12px;
+                background:#f5f5fb;
+                border-left:3px solid #4f46e5;
+                border-radius:6px;
+                font-size:12px;
+                color:#4b5563;
+              ">
+                Continuing to use Medico after this notice means you accept the revised terms.
+              </p>
+
+              <p style="margin:0; font-size:12.5px; color:#6b7280;">
+                Thanks for being part of Medico.
               </p>
             `,
           }),
