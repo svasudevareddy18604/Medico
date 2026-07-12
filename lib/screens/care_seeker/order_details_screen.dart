@@ -4,15 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:screen_protector/screen_protector.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
+import '../../widgets/verified_badge.dart';
 import 'careseekerfeedback_screen.dart';
 import 'cancellationpolicy_screen.dart';
+import 'caretaker_live_tracking_screen.dart';
 
 class OrderDetailsScreen extends StatefulWidget {
   final List<dynamic> orders;
@@ -25,36 +26,21 @@ class OrderDetailsScreen extends StatefulWidget {
 class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     with SingleTickerProviderStateMixin {
 
-  // ── State ─────────────────────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────
   Map          _live       = {};
   bool         _loading    = true;
   bool         _cancelling = false;
   Timer?       _timer;
-  final _mapCtrl = MapController();
-  bool         _mapReady   = false;
-  List<LatLng> _routePoints = [];
 
-  // Tracks whether screenshot/screen-recording protection is currently ON,
-  // so we only toggle the native flag when the state actually changes.
-  // NOTE: protection still runs silently in the background — we simply no
-  // longer surface any UI copy about it to the user.
   bool _screenshotBlocked = false;
-
-  // Whether feedback has already been submitted for this order — checked
-  // locally (SharedPreferences) as a fallback in case the backend order
-  // payload doesn't yet return a feedback flag.
   bool _feedbackGiven = false;
+  bool _detailsExpanded = false;
 
   late AnimationController _anim;
   late Animation<double>   _fade;
 
-  // ── Rich green for total amount (better contrast than a washed-out success) ──
   static const Color _totalGreen = Color(0xFF16A34A);
 
-  // ── Instagram-style verified blue for professional caretakers ────────────────
-  static const Color _verifiedBlue = Color(0xFF0095F6);
-
-  // ── Dark mode ─────────────────────────────────────────────────────────────────
   bool get _dark => themeNotifier.value == ThemeMode.dark;
 
   Color get _surface => _dark ? const Color(0xFF1E293B) : AppColors.cardBg;
@@ -63,18 +49,13 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   Color get _subText => _dark ? Colors.white60 : AppColors.muted;
   Color get _divider => _dark ? Colors.white.withOpacity(0.07) : AppColors.border;
 
-  // ── Derived getters ───────────────────────────────────────────────────────────
+  // ── Derived getters ───────────────────────────────────────────────
   Map    get _order      => _live.isNotEmpty ? _live : Map.from(widget.orders.first);
   String get _status     => (_order["status"] ?? "").toString().toUpperCase();
   bool   get _cancelled  => _status == "CANCELLED";
   bool   get _completed  => _status == "COMPLETED";
   bool   get _cancellable => ["CONFIRMED", "ACCEPTED"].contains(_status);
 
-  // Screenshots are allowed only while the booking is still pending
-  // (CONFIRMED / awaiting a caretaker). The moment it's ACCEPTED — and for
-  // every stage after that — screenshots & screen recording get blocked to
-  // protect the caretaker's live location, phone number, etc. This runs
-  // silently; no banner is shown to the user about it.
   bool get _shouldBlockScreenshot =>
       ["ACCEPTED", "ON_THE_WAY", "COMPLETED"].contains(_status);
 
@@ -83,33 +64,33 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   num  get _total         => num.tryParse(_order["total"]?.toString()           ?? "0") ?? 0;
   bool get _hasCharge     => _serviceCharge > 0;
 
-String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? _order["category"] ?? "Service").toString();
+  String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? _order["category"] ?? "Service").toString();
 
   num    get _discount    => num.tryParse(_order["discount_amount"]?.toString() ?? "0") ?? 0;
   bool   get _hasDiscount => _discount > 0;
   String get _couponCode  => (_order["coupon_code"] ?? "").toString();
 
-  // ── Privacy guard: hide carer details once service is completed ───────────────
   bool   get _hasCarer   =>
       !_completed &&
       (_order["caregiver_name"]?.toString().trim().isNotEmpty ?? false);
   String get _carerPhone => _completed ? "" : (_order["caregiver_phone"]?.toString() ?? "");
 
-  // ── Professional / verified caretaker badge (Instagram-style blue tick) ──────
   bool get _isVerifiedCarer {
-    final v = _order["caregiver_verified"] ??
-        _order["caregiver_is_professional"] ??
-        _order["is_verified"] ??
-        _order["caretaker_verified"];
-    if (v == null) return false;
+  final v = _order["caregiver_verified"] ??
+      _order["caregiver_is_professional"] ??
+      _order["is_verified"] ??
+      _order["caretaker_verified"];
+  if (v != null) {
     if (v is bool) return v;
     return v.toString().trim().toLowerCase() == "true" || v.toString() == "1";
   }
+  // Fallback to actual DB columns if backend join doesn't alias the above.
+  final approval = (_order["approval_status"] ?? "").toString().trim().toLowerCase();
+  final docs = _order["documents_uploaded"];
+  final docsUploaded = docs is bool ? docs : docs?.toString() == "1";
+  return approval == "approved" && docsUploaded == true;
+}
 
-  // ── Feedback-already-given check ──────────────────────────────────────────────
-  // Prefers a backend-provided flag (feedback_given / has_feedback / rating)
-  // if present, and falls back to a locally persisted flag (SharedPreferences)
-  // set the moment feedback is successfully submitted from this device.
   bool get _feedbackAlreadyGiven {
     final v = _order["feedback_given"] ??
         _order["has_feedback"] ??
@@ -122,7 +103,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     return s == "true" || s == "1" || double.tryParse(s) != null && double.parse(s) > 0;
   }
 
-  // ✅ NEW — Service OTP getters
   bool get _hasOtp =>
       (_order["otp"]?.toString().trim().isNotEmpty ?? false);
 
@@ -140,9 +120,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     return v.toString() == "1" || v.toString().toLowerCase() == "true";
   }
 
-  // Shown for any active (non-cancelled, non-completed) booking that has an
-  // OTP which hasn't expired yet — i.e. from the moment the order is placed
-  // right up until the service is marked complete.
   bool get _showOtpCard => _hasOtp && !_completed && !_cancelled && !_otpExpired;
 
   double? get _cLat => double.tryParse(_order["caretaker_latitude"]?.toString()  ?? "");
@@ -223,7 +200,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     } catch (_) { return {"percent": 0, "amount": 0.0, "note": "Unable to calculate refund."}; }
   }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────────
+  // ── Lifecycle ─────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
@@ -240,15 +217,12 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     _timer?.cancel();
     themeNotifier.removeListener(_rb);
     _anim.dispose();
-    // Always release the screenshot lock when leaving this screen so it
-    // doesn't leak into the rest of the app.
     ScreenProtector.preventScreenshotOff();
     super.dispose();
   }
 
   void _rb() { if (mounted) setState(() {}); }
 
-  // ── Local "already submitted" flag (SharedPreferences fallback) ───────────────
   String get _feedbackPrefsKey =>
       "feedback_given_${widget.orders.first["id"]}";
 
@@ -258,11 +232,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     if (mounted) setState(() => _feedbackGiven = given);
   }
 
-  // ── Screenshot / screen-recording protection ─────────────────────────────────
-  // Enabled the instant the booking moves to ACCEPTED (and stays enabled
-  // through ON_THE_WAY / COMPLETED). Disabled while still CONFIRMED
-  // (pending) or if the booking is CANCELLED. This is purely a native-layer
-  // protection — intentionally silent, no UI copy is shown for it.
   Future<void> _syncScreenshotProtection() async {
     final shouldBlock = _shouldBlockScreenshot;
     if (shouldBlock == _screenshotBlocked) return;
@@ -278,50 +247,16 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     }
   }
 
-  // ── OSRM Route ────────────────────────────────────────────────────────────────
-  Future<void> _loadRoute() async {
-    try {
-      final url =
-          "https://router.project-osrm.org/route/v1/driving/"
-          "${_cLng!.toStringAsFixed(6)},${_cLat!.toStringAsFixed(6)};"
-          "${_uLng!.toStringAsFixed(6)},${_uLat!.toStringAsFixed(6)}"
-          "?overview=full&geometries=geojson";
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return;
-      final data   = jsonDecode(res.body);
-      final coords = data["routes"][0]["geometry"]["coordinates"] as List;
-      final pts    = coords
-          .map((e) => LatLng((e[1] as num).toDouble(), (e[0] as num).toDouble()))
-          .toList();
-      if (mounted) setState(() => _routePoints = pts);
-    } catch (e) {
-      debugPrint("ROUTE ERROR: $e");
-    }
-  }
-
   Future<void> _refresh({bool silent = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
     final url = "${Api.baseUrl}/orders/detail/${widget.orders.first["id"]}";
     try {
       final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
-
-      // TEMP DEBUG — remove once the endpoint is confirmed working.
-      debugPrint("ORDER DETAIL REQUEST: $url");
-      debugPrint("ORDER DETAIL STATUS: ${res.statusCode}");
-      debugPrint("ORDER DETAIL BODY: ${res.body}");
-
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (data["order"] != null && mounted) {
           setState(() { _live = data["order"]; _loading = false; });
           await _syncScreenshotProtection();
-          if (_tracking) await _loadRoute();
-          if (_tracking && !_mapReady) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _mapCtrl.move(LatLng(_cLat!, _cLng!), 15);
-              _mapReady = true;
-            });
-          }
           if (!silent) _anim.forward(from: 0);
         }
       }
@@ -364,7 +299,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ),
   );
 
-  // ── Build ──────────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: _bg,
@@ -383,30 +318,51 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(16, 20, 16, 60),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
                       _sectionLabel("Booking Progress"),
                       _progressCard(),
-                      // ✅ NEW — Service OTP, shown right after progress so
-                      // it's easy to find and hand to the caretaker.
+
                       if (_showOtpCard) ...[
                         const SizedBox(height: 20),
                         _sectionLabel("Service OTP"),
                         _otpCard(),
                       ],
+
                       if (_tracking) ...[
                         const SizedBox(height: 20),
                         _sectionLabel("Live Tracking"),
-                        _trackingCard(),
+                        _trackPromptCard(),
                       ],
+
                       const SizedBox(height: 20),
-                      _sectionLabel("Service Details"),
-                      _serviceCard(),
+                      _sectionLabel("Your Caretaker"),
+                      _caretakerMiniCard(),
+
                       const SizedBox(height: 20),
-                      _sectionLabel("Payment"),
-                      _paymentCard(),
-                      const SizedBox(height: 20),
-                      _sectionLabel("Location & Schedule"),
-                      _locationCard(),
-                      const SizedBox(height: 20),
+                      _detailsToggle(),
+                      AnimatedSize(
+                        duration: const Duration(milliseconds: 280),
+                        curve: Curves.easeInOut,
+                        alignment: Alignment.topCenter,
+                        child: _detailsExpanded
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 16),
+                                  _sectionLabel("Service Details"),
+                                  _serviceCard(),
+                                  const SizedBox(height: 20),
+                                  _sectionLabel("Payment"),
+                                  _paymentCard(),
+                                  const SizedBox(height: 20),
+                                  _sectionLabel("Location & Schedule"),
+                                  _locationCard(),
+                                ],
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+
+                      const SizedBox(height: 22),
                       if (_cancellable) _cancelBtn(),
                       if (!_cancellable && !_completed && !_cancelled)
                         _blockedCancelNote(),
@@ -437,7 +393,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]),
   );
 
-  // ── Header ────────────────────────────────────────────────────────────────────
+  // ── Header ────────────────────────────────────────────────────────
   Widget _header() => Container(
     padding: EdgeInsets.only(
       top: MediaQuery.of(context).padding.top + 16,
@@ -542,7 +498,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ),
   );
 
-  // ── Progress Card ─────────────────────────────────────────────────────────────
+  // ── Progress Card ─────────────────────────────────────────────────
   Widget _progressCard() {
     final steps = [
       {"label": "Pending",    "icon": Icons.hourglass_top_rounded},
@@ -567,7 +523,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
 
     return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-      // ── Status pill ──────────────────────────────────────────────────────────
       AnimatedContainer(
         duration: const Duration(milliseconds: 350),
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
@@ -589,13 +544,10 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
 
       const SizedBox(height: 28),
 
-      // ── Step progress — single continuous connecting line, perfectly
-      // aligned through every dot's center, so it never looks broken. ────────
       _stepperRow(steps),
 
       const SizedBox(height: 20),
 
-      // ── Info / cancel note ────────────────────────────────────────────────────
       AnimatedContainer(
         duration: const Duration(milliseconds: 350),
         width: double.infinity,
@@ -653,9 +605,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]));
   }
 
-  // ── Stepper: a single background line + a single animated foreground line,
-  // both laid out under a Row of evenly-spaced dots so the line always meets
-  // dead-center of every dot — no matter the screen width. ─────────────────────
   Widget _stepperRow(List<Map<String, dynamic>> steps) {
     final n = steps.length;
     final fraction = _cancelled ? 0.0 : _step / (n - 1);
@@ -670,7 +619,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
       return SizedBox(
         height: 92,
         child: Stack(children: [
-          // Background (incomplete) line
           Positioned(
             top: dotSize / 2 - 2,
             left: sidePad,
@@ -683,7 +631,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
               ),
             ),
           ),
-          // Foreground (completed) line
           Positioned(
             top: dotSize / 2 - 2,
             left: sidePad,
@@ -705,7 +652,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
               ),
             ),
           ),
-          // Dots + labels
           Row(
             children: List.generate(n, (i) {
               final isDone    = !_cancelled && i <= _step;
@@ -769,8 +715,11 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     });
   }
 
-  // ✅ NEW — Service OTP card. Big spaced-out digits, tap-to-copy, and a
-  // clear warning not to share it until the caretaker has actually arrived.
+  // ── Service OTP card — copy option removed ─────────────────────────
+  // ── Service OTP card — distinct teal theme ─────────────────────────
+  static const Color _otpStart = Color(0xFF0EA5A5); // teal
+  static const Color _otpEnd   = Color(0xFF0B7A87); // deep teal
+
   Widget _otpCard() {
     final otp = _order["otp"].toString();
     return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -778,9 +727,10 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            gradient: AppColors.gradient,
+            gradient: const LinearGradient(colors: [_otpStart, _otpEnd],
+                begin: Alignment.topLeft, end: Alignment.bottomRight),
             borderRadius: BorderRadius.circular(12),
-            boxShadow: AppColors.glowShadow,
+            boxShadow: [BoxShadow(color: _otpStart.withOpacity(0.35), blurRadius: 10, offset: const Offset(0, 3))],
           ),
           child: const Icon(Icons.password_rounded, color: Colors.white, size: 18),
         ),
@@ -814,36 +764,29 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
       const SizedBox(height: 18),
 
       Center(
-        child: GestureDetector(
-          onTap: () {
-            Clipboard.setData(ClipboardData(text: otp));
-            _snack("OTP copied!", AppColors.primary);
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            decoration: BoxDecoration(
-              gradient: AppColors.gradient,
-              borderRadius: BorderRadius.circular(18),
-              boxShadow: AppColors.glowShadow,
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              ...otp.split("").map((d) => Container(
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                width: 36, height: 44,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white.withOpacity(0.3)),
-                ),
-                child: Text(d,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
-              )),
-              const SizedBox(width: 8),
-              const Icon(Icons.copy_rounded, color: Colors.white70, size: 18),
-            ]),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [_otpStart, _otpEnd],
+                begin: Alignment.topLeft, end: Alignment.bottomRight),
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [BoxShadow(color: _otpStart.withOpacity(0.4), blurRadius: 16, offset: const Offset(0, 6))],
           ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            ...otp.split("").map((d) => Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              width: 36, height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.3)),
+              ),
+              child: Text(d,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
+            )),
+          ]),
         ),
       ),
 
@@ -852,19 +795,19 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(
-          color: AppColors.warning.withOpacity(0.06),
+          color: _otpStart.withOpacity(0.07),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.warning.withOpacity(0.18)),
+          border: Border.all(color: _otpStart.withOpacity(0.20)),
         ),
         child: Row(children: [
-          Icon(Icons.info_outline_rounded, size: 14, color: AppColors.warning),
+          Icon(Icons.info_outline_rounded, size: 14, color: _otpEnd),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               "Don't share this over a call or chat in advance. It confirms your caretaker has physically arrived.",
               style: TextStyle(
                   fontSize: 11.5, height: 1.4,
-                  color: AppColors.warning, fontWeight: FontWeight.w500),
+                  color: _otpEnd, fontWeight: FontWeight.w500),
             ),
           ),
         ]),
@@ -872,222 +815,233 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]));
   }
 
-  // ── Live Tracking Card ────────────────────────────────────────────────────────
-  Widget _trackingCard() {
-    final carer = LatLng(_cLat!, _cLng!);
-    final user  = LatLng(_uLat!, _uLng!);
+  // ── Track Caretaker prompt (replaces inline map) ───────────────────
+  Widget _trackPromptCard() {
     final carerName = _order["caregiver_name"]?.toString().trim().isNotEmpty == true
         ? _order["caregiver_name"].toString()
         : "Your Caretaker";
 
-    return _card(child: Column(children: [
-
-      // ── Carer banner ─────────────────────────────────────────────────────────
-      Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          gradient: AppColors.gradient,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: AppColors.glowShadow,
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-              width: 50, height: 50,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.2),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
-              ),
-              child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 26),
-            ),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Flexible(
-                    child: Text(carerName,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
-                  ),
-                  if (_isVerifiedCarer) ...[
-                    const SizedBox(width: 5),
-                    GestureDetector(
-                      onTap: _showVerifiedInfo,
-                      child: const Icon(Icons.verified_rounded, color: Colors.white, size: 16),
-                    ),
-                  ],
-                ]),
-                const SizedBox(height: 3),
-                const Text("is on the way to you",
-                    style: TextStyle(
-                        color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w500)),
-              ]),
-            ),
-            GestureDetector(
-              onTap: _refresh,
-              child: Container(
-                padding: const EdgeInsets.all(9),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withOpacity(0.25)),
-                ),
-                child: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 14),
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: AppColors.gradient,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: AppColors.glowShadow,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            width: 48, height: 48,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.18),
-              borderRadius: BorderRadius.circular(100),
-              border: Border.all(color: Colors.white.withOpacity(0.22)),
+              color: Colors.white.withOpacity(0.2),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.5),
             ),
-            child: Row(children: [
-              Container(
-                width: 6, height: 6,
-                decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF4ADE80)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text("$_etaLabel  •  $_distLabel",
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
-              ),
+            child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(
+                  child: Text("$carerName is on the way",
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+                ),
+                if (_isVerifiedCarer) ...[
+                  const SizedBox(width: 6),
+                  const VerifiedBadge(size: 15),
+                ],
+              ]),
+              const SizedBox(height: 4),
+              Row(children: [
+                Container(
+                  width: 6, height: 6,
+                  decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF4ADE80)),
+                ),
+                const SizedBox(width: 6),
+                Text("$_etaLabel  •  $_distLabel",
+                    style: const TextStyle(color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w600)),
+              ]),
             ]),
           ),
         ]),
-      ),
-
-      const SizedBox(height: 14),
-
-      // ── Map (OpenStreetMap tiles) ────────────────────────────────────────────
-      ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: SizedBox(
-          height: 300,
-          child: FlutterMap(
-            mapController: _mapCtrl,
-            options: MapOptions(
-              initialCenter: carer,
-              initialZoom: 15,
-              minZoom: 3,
-              maxZoom: 19,
-              interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-                userAgentPackageName: "com.medico.app",
-                maxZoom: 19,
-                tileProvider: NetworkTileProvider(),
-                errorTileCallback: (tile, error, stackTrace) =>
-                    debugPrint("MAP TILE ERROR: $error"),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => CaretakerLiveTrackingScreen(orderId: _order["id"] as int),
               ),
-              PolylineLayer(polylines: [
-                Polyline(
-                  points: _routePoints.isNotEmpty ? _routePoints : [carer, user],
-                  strokeWidth: 7,
-                  color: AppColors.primary,
-                  borderStrokeWidth: 2.5,
-                  borderColor: Colors.white.withOpacity(0.7),
-                ),
-              ]),
-              MarkerLayer(markers: [
-                Marker(
-                  point: carer, width: 80, height: 80,
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Container(
-                      padding: const EdgeInsets.all(9),
-                      decoration: BoxDecoration(
-                        gradient: AppColors.gradient,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2.5),
-                        boxShadow: AppColors.glowShadow,
-                      ),
-                      child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 22),
-                    ),
-                    const SizedBox(height: 2),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [BoxShadow(
-                            color: AppColors.primary.withOpacity(0.4), blurRadius: 6)],
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Text(
-                          carerName.split(" ").first,
-                          style: const TextStyle(
-                              fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white),
-                        ),
-                        if (_isVerifiedCarer) ...[
-                          const SizedBox(width: 3),
-                          const Icon(Icons.verified_rounded, size: 9, color: Colors.white),
-                        ],
-                      ]),
-                    ),
-                  ]),
-                ),
-                Marker(
-                  point: user, width: 64, height: 64,
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppColors.danger,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2.5),
-                        boxShadow: [BoxShadow(
-                            color: AppColors.danger.withOpacity(0.4),
-                            blurRadius: 12, offset: const Offset(0, 4))],
-                      ),
-                      child: const Icon(Icons.home_rounded, color: Colors.white, size: 20),
-                    ),
-                    const SizedBox(height: 2),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppColors.danger,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [BoxShadow(
-                            color: AppColors.danger.withOpacity(0.35), blurRadius: 6)],
-                      ),
-                      child: const Text("You",
-                          style: TextStyle(
-                              fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white)),
-                    ),
-                  ]),
-                ),
-              ]),
-            ],
+            ),
+            icon: const Icon(Icons.map_rounded, color: Colors.white, size: 18),
+            label: const Text("View Live Location",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13.5)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              side: BorderSide(color: Colors.white.withOpacity(0.55), width: 1.4),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
           ),
         ),
-      ),
+      ]),
+    );
+  }
 
-      const SizedBox(height: 12),
+  // ── Compact caretaker card ──────────────────────────────────────────
+  Widget _caretakerMiniCard() {
+    if (_completed) return _privacyBlock();
 
-      _noteRow(
-        icon: Icons.info_outline_rounded,
-        text: "Route updates every 3 seconds. Tap the refresh icon to update instantly.",
-        color: AppColors.primary,
+    if (!_hasCarer) {
+      return _card(child: Row(children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.warning.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(Icons.hourglass_top_rounded, color: AppColors.warning, size: 20),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text("Looking for a caretaker…",
+                style: TextStyle(
+                    color: AppColors.warning, fontSize: 13.5,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text("We'll notify you the moment someone accepts.",
+                style: TextStyle(color: AppColors.warning, fontSize: 11.5)),
+          ]),
+        ),
+      ]));
+    }
+
+    final name = _order["caregiver_name"].toString();
+
+    return _card(child: Row(children: [
+      Container(
+        width: 52, height: 52,
+        decoration: BoxDecoration(
+          gradient: AppColors.gradient, shape: BoxShape.circle,
+          boxShadow: AppColors.glowShadow,
+        ),
+        child: const Icon(Icons.person_rounded, color: Colors.white, size: 26),
       ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Flexible(
+              child: Text(name,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 15.5, fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2, color: _text)),
+            ),
+            if (_isVerifiedCarer) ...[
+              const SizedBox(width: 6),
+              VerifiedBadge(size: 16, onTap: _showVerifiedInfo),
+            ],
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                gradient: AppColors.gradient,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Text(
+                _status == "ON_THE_WAY" ? "En Route 🏍" : "Assigned",
+                style: const TextStyle(
+                    fontSize: 10, color: Colors.white, fontWeight: FontWeight.w800),
+              ),
+            ),
+            if (_isVerifiedCarer) ...[
+              const SizedBox(width: 6),
+              VerifiedChip(onTap: _showVerifiedInfo),
+            ],
+          ]),
+        ]),
+      ),
+      if (_carerPhone.isNotEmpty)
+        GestureDetector(
+          onTap: () => launchUrl(Uri.parse("tel:$_carerPhone")),
+          child: Container(
+            width: 46, height: 46,
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient, shape: BoxShape.circle,
+              boxShadow: AppColors.glowShadow,
+            ),
+            child: const Icon(Icons.call_rounded, size: 20, color: Colors.white),
+          ),
+        ),
     ]));
   }
 
-  // ── Service Card ──────────────────────────────────────────────────────────────
+  // ── "View Full Details" toggle ──────────────────────────────────────
+  Widget _detailsToggle() => GestureDetector(
+    onTap: () => setState(() => _detailsExpanded = !_detailsExpanded),
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: _detailsExpanded
+            ? AppColors.primary.withOpacity(0.08)
+            : _surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _detailsExpanded
+              ? AppColors.primary.withOpacity(0.35)
+              : AppColors.border.withOpacity(_dark ? 0.3 : 1),
+        ),
+        boxShadow: _detailsExpanded ? [] : AppColors.cardShadow,
+      ),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.receipt_long_rounded, size: 17, color: AppColors.primary),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              _detailsExpanded ? "Hide Full Details" : "View Full Details",
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w800, color: _text),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              "Service, payment, address & schedule",
+              style: TextStyle(fontSize: 11, color: _subText),
+            ),
+          ]),
+        ),
+        AnimatedRotation(
+          turns: _detailsExpanded ? 0.5 : 0,
+          duration: const Duration(milliseconds: 220),
+          child: const Icon(Icons.keyboard_arrow_down_rounded,
+              color: AppColors.primary, size: 24),
+        ),
+      ]),
+    ),
+  );
+
+  // ── Service Card ──────────────────────────────────────────────────
   Widget _serviceCard() {
     final code = (_order["order_code"] ?? "").toString();
     final slot = (_order["slot"]       ?? "-").toString();
     final cat  = (_order["category"]   ?? "").toString();
 
     return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
       Text(_svcName,
           style: TextStyle(
               fontSize: 17, fontWeight: FontWeight.w800,
@@ -1105,7 +1059,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
 
       const SizedBox(height: 12),
 
-      // Order code copy
       GestureDetector(
         onTap: () {
           Clipboard.setData(ClipboardData(text: code));
@@ -1144,132 +1097,9 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
           ]),
         ),
       ),
-
-      const SizedBox(height: 16),
-      _div(),
-      const SizedBox(height: 16),
-
-      // ── Carer info — hidden once completed ───────────────────────────────────
-      if (_completed)
-        _privacyBlock()
-      else if (_hasCarer) ...[
-        Row(children: [
-          Container(
-            width: 48, height: 48,
-            decoration: BoxDecoration(
-              gradient: AppColors.gradient, shape: BoxShape.circle,
-              boxShadow: AppColors.glowShadow,
-            ),
-            child: const Icon(Icons.person_rounded, color: Colors.white, size: 24),
-          ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Flexible(
-                  child: Text(_order["caregiver_name"].toString(),
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w800,
-                          letterSpacing: -0.2, color: _text)),
-                ),
-                if (_isVerifiedCarer) ...[
-                  const SizedBox(width: 4),
-                  GestureDetector(
-                    onTap: _showVerifiedInfo,
-                    child: const Icon(Icons.verified_rounded, size: 15, color: _verifiedBlue),
-                  ),
-                ],
-              ]),
-              const SizedBox(height: 3),
-              if (_carerPhone.isNotEmpty)
-                Row(children: [
-                  Icon(Icons.phone_rounded, size: 12, color: AppColors.muted),
-                  const SizedBox(width: 4),
-                  Text(_carerPhone,
-                      style: TextStyle(fontSize: 12, color: AppColors.muted)),
-                ]),
-              const SizedBox(height: 6),
-              Row(children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                  decoration: BoxDecoration(
-                    gradient: AppColors.gradient,
-                    borderRadius: BorderRadius.circular(7),
-                  ),
-                  child: Text(
-                    _status == "ON_THE_WAY" ? "En Route 🏍" : "Assigned",
-                    style: const TextStyle(
-                        fontSize: 10, color: Colors.white, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                if (_isVerifiedCarer) ...[
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: _showVerifiedInfo,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _verifiedBlue.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(color: _verifiedBlue.withOpacity(0.3)),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.verified_rounded, size: 10, color: _verifiedBlue),
-                        const SizedBox(width: 3),
-                        Text("Professional",
-                            style: TextStyle(
-                                fontSize: 9.5, color: _verifiedBlue,
-                                fontWeight: FontWeight.w800)),
-                      ]),
-                    ),
-                  ),
-                ],
-              ]),
-            ]),
-          ),
-          if (_carerPhone.isNotEmpty)
-            GestureDetector(
-              onTap: () => launchUrl(Uri.parse("tel:$_carerPhone")),
-              child: Container(
-                width: 46, height: 46,
-                decoration: BoxDecoration(
-                  gradient: AppColors.gradient, shape: BoxShape.circle,
-                  boxShadow: AppColors.glowShadow,
-                ),
-                child: const Icon(Icons.call_rounded, size: 20, color: Colors.white),
-              ),
-            ),
-        ]),
-      ] else ...[
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppColors.warning.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.warning.withOpacity(0.2)),
-          ),
-          child: Row(children: [
-            Icon(Icons.hourglass_top_rounded, color: AppColors.warning, size: 20),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text("Looking for a caretaker…",
-                    style: TextStyle(
-                        color: AppColors.warning, fontSize: 13,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 2),
-                Text("We'll notify you once someone accepts.",
-                    style: TextStyle(color: AppColors.warning, fontSize: 11.5)),
-              ]),
-            ),
-          ]),
-        ),
-      ],
     ]));
   }
 
-  // ── Verified caretaker info (Instagram-style tap-on-badge sheet) ─────────────
   void _showVerifiedInfo() {
     showModalBottomSheet(
       context: context,
@@ -1287,10 +1117,10 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: _verifiedBlue.withOpacity(0.12),
+                color: VerifiedBadge.start.withOpacity(0.12),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.verified_rounded, color: _verifiedBlue, size: 22),
+              child: const VerifiedBadge(size: 22),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -1301,7 +1131,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
           ]),
           const SizedBox(height: 14),
           Text(
-            "This blue tick means the caretaker's identity, certifications and "
+            "This badge means the caretaker's identity, certifications and "
             "background have been checked and verified by Medico, so you can "
             "book with confidence.",
             style: TextStyle(fontSize: 13.5, height: 1.5, color: _subText),
@@ -1334,7 +1164,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     );
   }
 
-  // ── Privacy Block (shown when service is COMPLETED) ───────────────────────────
   Widget _privacyBlock() => Container(
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
@@ -1389,7 +1218,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]),
   );
 
-  // ── Payment Card ──────────────────────────────────────────────────────────────
+  // ── Payment Card ──────────────────────────────────────────────────
   Widget _paymentCard() {
     final method  = (_order["payment_method"] ?? "COD").toString();
     final pStatus = (_order["payment_status"] ?? "PENDING").toString().toUpperCase();
@@ -1475,7 +1304,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         _div(),
       ],
 
-      // ── Total amount row — prominent with deep green ──────────────────────────
       _totalRow(_hasCharge ? "Total (incl. charge)" : "Total Amount", "₹$_total"),
 
       _div(),
@@ -1501,7 +1329,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]));
   }
 
-  // ── Dedicated total row with stronger green treatment ─────────────────────────
   Widget _totalRow(String label, String val) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
     decoration: BoxDecoration(
@@ -1550,7 +1377,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     ]),
   );
 
-  // ── Location Card ─────────────────────────────────────────────────────────────
+  // ── Location Card ──────────────────────────────────────────────────
   Widget _locationCard() => _card(child: Column(children: [
     _row(Icons.location_on_outlined, "Service Address",
         (_order["location"] ?? "-").toString()),
@@ -1561,7 +1388,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
         (_order["slot"] ?? "-").toString()),
   ]));
 
-  // ── Action Buttons ────────────────────────────────────────────────────────────
+  // ── Action Buttons ───────────────────────────────────────────────
   Widget _cancelBtn() => SizedBox(
     width: double.infinity,
     child: OutlinedButton.icon(
@@ -1638,15 +1465,13 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
             ),
           ),
         );
-        // In case this screen is still on the stack when the user returns
-        // (e.g. they backed out before the success redirect completed),
-        // re-check the locally persisted flag so the button state stays correct.
-        _loadFeedbackFlag();
+        final prefs = await SharedPreferences.getInstance();
+        final given = prefs.getBool(_feedbackPrefsKey) ?? false;
+        if (mounted) setState(() => _feedbackGiven = given);
       },
     ),
   );
 
-  // ── Shown once feedback has already been submitted for this booking ──────────
   Widget _feedbackGivenBadge() => Container(
     width: double.infinity,
     padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
@@ -1671,14 +1496,14 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
               style: TextStyle(
                   fontSize: 14, fontWeight: FontWeight.w800, color: _totalGreen)),
           const SizedBox(height: 3),
-          Text("Thanks for rating this service.",
+          Text("Thanks for rating this service — you're all set.",
               style: TextStyle(fontSize: 12, color: _subText)),
         ]),
       ),
     ]),
   );
 
-  // ── Cancel Sheet ──────────────────────────────────────────────────────────────
+  // ── Cancel Sheet ──────────────────────────────────────────────────
   void _showCancelSheet() {
     final ctrl   = TextEditingController();
     final refund = _refundPreview;
@@ -1892,7 +1717,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     );
   }
 
-  // ── Refund Result Sheet ───────────────────────────────────────────────────────
+  // ── Refund Result Sheet ──────────────────────────────────────────
   void _showRefundSheet(Map? refund) {
     final ok     = refund?["eligible"] == true;
     final amount = refund?["refundAmount"] ?? 0;
@@ -1999,7 +1824,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
     );
   }
 
-  // ── Reusable Widgets ──────────────────────────────────────────────────────────
+  // ── Reusable Widgets ─────────────────────────────────────────────
   Widget _handle() => Container(
     width: 40, height: 4,
     margin: const EdgeInsets.only(bottom: 20),
@@ -2027,29 +1852,6 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
   );
 
   Widget _div() => Divider(height: 24, thickness: 0.7, color: _divider);
-
-  // Small reusable "info strip" — used for the tracking tip.
-  Widget _noteRow({required IconData icon, required String text, required Color color}) =>
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.1)),
-        ),
-        child: Row(children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                  fontSize: 11.5, color: color.withOpacity(0.7),
-                  fontWeight: FontWeight.w500, height: 1.4),
-            ),
-          ),
-        ]),
-      );
 
   Widget _tag(IconData icon, String label, {bool outline = false}) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2120,7 +1922,7 @@ String get _svcName    => (_order["service_names"] ?? _order["service_name"] ?? 
   }
 }
 
-// ── Animated Pulse Dot ────────────────────────────────────────────────────────
+// ── Animated Pulse Dot ──────────────────────────────────────────────
 class _PulseDot extends StatefulWidget {
   final Color color;
   const _PulseDot({required this.color});

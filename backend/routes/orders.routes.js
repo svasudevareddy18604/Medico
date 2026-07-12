@@ -70,30 +70,6 @@ const computeRefund = (order) => {
    GET /orders/:userId
 ===================================================== */
 
-router.get("/:userId", async (req, res) => {
-  try {
-    const [orders] = await db.query(
-      `SELECT o.*, o.subtotal, o.service_charge,
-              GROUP_CONCAT(s.name SEPARATOR ', ') AS service_names
-       FROM orders o
-       LEFT JOIN order_items oi ON oi.order_id = o.id
-       LEFT JOIN services    s  ON s.id = oi.service_id
-       WHERE o.user_id = ?
-       GROUP BY o.id
-       ORDER BY o.id DESC`,
-      [req.params.userId]
-    );
-    return res.json(orders);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false });
-  }
-});
-
-/* =====================================================
-   GET /orders/detail/:id
-===================================================== */
-
 router.get("/detail/:id", async (req, res) => {
   try {
     const [[order]] = await db.query(
@@ -101,8 +77,10 @@ router.get("/detail/:id", async (req, res) => {
               o.otp, o.otp_verified, o.otp_created_at,
               o.otp_used_at, o.otp_expired,
               GROUP_CONCAT(s.name SEPARATOR ', ') AS service_names,
-              ct.first_name AS caregiver_name,
-              ct.mobile     AS caregiver_phone
+              ct.first_name        AS caregiver_name,
+              ct.mobile            AS caregiver_phone,
+              ct.approval_status   AS caregiver_approval_status,
+              ct.documents_uploaded AS caregiver_documents_uploaded
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.id
        LEFT JOIN services    s  ON s.id = oi.service_id
