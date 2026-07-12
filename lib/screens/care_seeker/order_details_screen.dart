@@ -76,20 +76,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   String get _carerPhone => _completed ? "" : (_order["caregiver_phone"]?.toString() ?? "");
 
   bool get _isVerifiedCarer {
-  final v = _order["caregiver_verified"] ??
-      _order["caregiver_is_professional"] ??
-      _order["is_verified"] ??
-      _order["caretaker_verified"];
-  if (v != null) {
-    if (v is bool) return v;
-    return v.toString().trim().toLowerCase() == "true" || v.toString() == "1";
+    final approval = (_order["caregiver_approval_status"] ?? "").toString().trim().toLowerCase();
+    final docs = _order["caregiver_documents_uploaded"];
+    final docsUploaded = docs is bool ? docs : docs?.toString() == "1";
+    return approval == "approved" && docsUploaded == true;
   }
-  // Fallback to actual DB columns if backend join doesn't alias the above.
-  final approval = (_order["approval_status"] ?? "").toString().trim().toLowerCase();
-  final docs = _order["documents_uploaded"];
-  final docsUploaded = docs is bool ? docs : docs?.toString() == "1";
-  return approval == "approved" && docsUploaded == true;
-}
 
   bool get _feedbackAlreadyGiven {
     final v = _order["feedback_given"] ??
