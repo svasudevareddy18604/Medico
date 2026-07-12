@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
@@ -11,8 +12,9 @@ import '../../config/api.dart';
 import '../../widgets/verified_badge.dart';
 
 /// Full-screen live tracking view for a caretaker's location.
-/// Self-contained — polls the order detail endpoint on its own,
-/// so it can be pushed/popped independently of OrderDetailsScreen.
+/// Zomato/Swiggy-style presentation — self-contained, polls the order
+/// detail endpoint on its own so it can be pushed/popped independently
+/// of OrderDetailsScreen.
 class CaretakerLiveTrackingScreen extends StatefulWidget {
   final int orderId;
   const CaretakerLiveTrackingScreen({super.key, required this.orderId});
@@ -23,13 +25,18 @@ class CaretakerLiveTrackingScreen extends StatefulWidget {
 }
 
 class _CaretakerLiveTrackingScreenState
-    extends State<CaretakerLiveTrackingScreen> {
+    extends State<CaretakerLiveTrackingScreen>
+    with SingleTickerProviderStateMixin {
   Map _order = {};
   bool _loading = true;
+  bool _refreshing = false;
   Timer? _timer;
   final _mapCtrl = MapController();
   bool _mapReady = false;
   List<LatLng> _routePoints = [];
+  double _heading = 0; // bike rotation, derived from route bearing
+
+  late AnimationController _pulseCtrl;
 
   bool get _dark => themeNotifier.value == ThemeMode.dark;
   Color get _surface => _dark ? const Color(0xFF1E293B) : Colors.white;
@@ -46,14 +53,15 @@ class _CaretakerLiveTrackingScreenState
   bool get _ready =>
       _cLat != null && _cLng != null && _uLat != null && _uLng != null;
 
+  // ✅ Fixed to match the actual joined columns from /orders/detail/:id
   bool get _isVerifiedCarer {
-    final v = _order["caregiver_verified"] ??
-        _order["caregiver_is_professional"] ??
-        _order["is_verified"] ??
-        _order["caretaker_verified"];
-    if (v == null) return false;
-    if (v is bool) return v;
-    return v.toString().trim().toLowerCase() == "true" || v.toString() == "1";
+    final approval = (_order["caregiver_approval_status"] ?? "")
+        .toString()
+        .trim()
+        .toLowerCase();
+    final docs = _order["caregiver_documents_uploaded"];
+    final docsUploaded = docs is bool ? docs : docs?.toString() == "1";
+    return approval == "approved" && docsUploaded == true;
   }
 
   String get _carerName =>
@@ -71,30 +79,50 @@ class _CaretakerLiveTrackingScreenState
 
   String get _distLabel {
     final m = _meters;
-    return m < 1000 ? "${m.round()} m away" : "${(m / 1000).toStringAsFixed(1)} km away";
+    return m < 1000
+        ? "${m.round()} m away"
+        : "${(m / 1000).toStringAsFixed(1)} km away";
+  }
+
+  int get _etaMins {
+    final mins = _meters <= 0 ? 0 : ((_meters / 1000 / 25) * 60).ceil();
+    return mins;
   }
 
   String get _etaLabel {
-    final mins = _meters <= 0 ? 0 : ((_meters / 1000 / 25) * 60).ceil();
+    final mins = _etaMins;
     if (mins <= 0) return "Arriving soon";
-    return "~$mins min${mins == 1 ? '' : 's'}";
+    return "Arriving in $mins min${mins == 1 ? '' : 's'}";
   }
+
+  String get _statusHeadline => switch (_status) {
+        "ON_THE_WAY" => "Caretaker is on the way",
+        "ACCEPTED"   => "Caretaker is preparing to leave",
+        _            => "Tracking your booking",
+      };
 
   @override
   void initState() {
     super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
     _refresh();
-    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _refresh(silent: true));
+    _timer = Timer.periodic(
+        const Duration(seconds: 3), (_) => _refresh(silent: true));
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _pulseCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _refresh({bool silent = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
+    if (silent && mounted) setState(() => _refreshing = true);
     try {
       final res = await http
           .get(Uri.parse("${Api.baseUrl}/orders/detail/${widget.orderId}"))
@@ -121,6 +149,7 @@ class _CaretakerLiveTrackingScreenState
       debugPrint("TRACKING FETCH ERROR: $e");
     }
     if (!silent && mounted) setState(() => _loading = false);
+    if (silent && mounted) setState(() => _refreshing = false);
   }
 
   Future<void> _loadRoute() async {
@@ -129,24 +158,40 @@ class _CaretakerLiveTrackingScreenState
           "${_cLng!.toStringAsFixed(6)},${_cLat!.toStringAsFixed(6)};"
           "${_uLng!.toStringAsFixed(6)},${_uLat!.toStringAsFixed(6)}"
           "?overview=full&geometries=geojson";
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+      final res =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
       if (res.statusCode != 200) return;
       final data = jsonDecode(res.body);
       final coords = data["routes"][0]["geometry"]["coordinates"] as List;
       final pts = coords
-          .map((e) => LatLng((e[1] as num).toDouble(), (e[0] as num).toDouble()))
+          .map((e) =>
+              LatLng((e[1] as num).toDouble(), (e[0] as num).toDouble()))
           .toList();
+      if (pts.length >= 2) {
+        _heading = _bearing(pts[0], pts[1]);
+      }
       if (mounted) setState(() => _routePoints = pts);
     } catch (e) {
       debugPrint("ROUTE ERROR: $e");
     }
   }
 
+  double _bearing(LatLng a, LatLng b) {
+    final lat1 = a.latitudeInRad;
+    final lat2 = b.latitudeInRad;
+    final dLon = (b.longitude - a.longitude) * (pi / 180);
+    final y = sin(dLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    final bearing = atan2(y, x) * (180 / pi);
+    return (bearing + 360) % 360;
+  }
+
   void _recenter() {
     if (!_ready) return;
-    final bounds = LatLngBounds.fromPoints(
-        [LatLng(_cLat!, _cLng!), LatLng(_uLat!, _uLng!)]);
-    _mapCtrl.fitCamera(CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(90)));
+    final bounds =
+        LatLngBounds.fromPoints([LatLng(_cLat!, _cLng!), LatLng(_uLat!, _uLng!)]);
+    _mapCtrl.fitCamera(
+        CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(90)));
   }
 
   @override
@@ -157,9 +202,14 @@ class _CaretakerLiveTrackingScreenState
           ? const Center(child: CircularProgressIndicator())
           : !_ready
               ? _unavailableView()
-              : Stack(children: [
-                  _map(),
-                  _topBar(),
+              : Column(children: [
+                  _statusHeader(),
+                  Expanded(
+                    child: Stack(children: [
+                      _map(),
+                      _mapControls(),
+                    ]),
+                  ),
                   _bottomCard(),
                 ]),
     );
@@ -176,11 +226,13 @@ class _CaretakerLiveTrackingScreenState
                 color: AppColors.muted.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.location_off_rounded, size: 40, color: AppColors.muted),
+              child: Icon(Icons.location_off_rounded,
+                  size: 40, color: AppColors.muted),
             ),
             const SizedBox(height: 18),
             Text("Live location unavailable",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _text)),
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w800, color: _text)),
             const SizedBox(height: 8),
             Text(
               "Your caretaker's location appears here automatically once they're on the way.",
@@ -203,7 +255,8 @@ class _CaretakerLiveTrackingScreenState
                     shadowColor: Colors.transparent,
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape:
+                        RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                   child: const Text("Go Back",
                       style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -211,6 +264,107 @@ class _CaretakerLiveTrackingScreenState
               ),
             ),
           ]),
+        ),
+      );
+
+  // ── Top status header — Zomato/Swiggy style ─────────────────────────
+  Widget _statusHeader() => Container(
+        width: double.infinity,
+        padding: EdgeInsets.only(
+          top: MediaQuery.of(context).padding.top + 14,
+          left: 18,
+          right: 18,
+          bottom: 22,
+        ),
+        decoration: const BoxDecoration(
+          gradient: AppColors.gradient,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+        ),
+        child: Column(children: [
+          Row(children: [
+            _headerIconBtn(Icons.arrow_back_rounded, () => Navigator.pop(context)),
+            Expanded(
+              child: Column(children: [
+                Text(_carerName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.1)),
+              ]),
+            ),
+            if (_carerPhone.isNotEmpty)
+              _headerIconBtn(
+                  Icons.call_rounded, () => launchUrl(Uri.parse("tel:$_carerPhone")))
+            else
+              const SizedBox(width: 40),
+          ]),
+          const SizedBox(height: 14),
+          Text(
+            _statusHeadline,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.16),
+              borderRadius: BorderRadius.circular(100),
+              border: Border.all(color: Colors.white.withOpacity(0.22)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(_etaLabel,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Container(
+                  width: 4,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.6), shape: BoxShape.circle),
+                ),
+              ),
+              Text(_distLabel,
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.9),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: () => _refresh(silent: true),
+                child: RotationTransition(
+                  turns: _refreshing
+                      ? const AlwaysStoppedAnimation(0)
+                      : const AlwaysStoppedAnimation(0),
+                  child: Icon(Icons.refresh_rounded,
+                      color: Colors.white.withOpacity(0.9), size: 16),
+                ),
+              ),
+            ]),
+          ),
+        ]),
+      );
+
+  Widget _headerIconBtn(IconData icon, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.18),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.2)),
+          ),
+          child: Icon(icon, color: Colors.white, size: 19),
         ),
       );
 
@@ -233,219 +387,218 @@ class _CaretakerLiveTrackingScreenState
             errorTileCallback: (tile, error, stackTrace) =>
                 debugPrint("MAP TILE ERROR: $error"),
           ),
+          // Soft coverage circle around the destination — Zomato-style radius.
+          CircleLayer(circles: [
+            CircleMarker(
+              point: LatLng(_uLat!, _uLng!),
+              radius: 90,
+              useRadiusInMeter: true,
+              color: AppColors.primary.withOpacity(0.10),
+              borderColor: AppColors.primary.withOpacity(0.25),
+              borderStrokeWidth: 1.4,
+            ),
+          ]),
           PolylineLayer(polylines: [
             Polyline(
               points: _routePoints.isNotEmpty
                   ? _routePoints
                   : [LatLng(_cLat!, _cLng!), LatLng(_uLat!, _uLng!)],
-              strokeWidth: 7,
+              strokeWidth: 6,
               color: AppColors.primary,
               borderStrokeWidth: 2.5,
-              borderColor: Colors.white.withOpacity(0.7),
+              borderColor: Colors.white.withOpacity(0.85),
             ),
           ]),
           MarkerLayer(markers: [
             Marker(
-              point: LatLng(_cLat!, _cLng!),
-              width: 84,
-              height: 84,
-              child: _carerMarker(),
+              point: LatLng(_uLat!, _uLng!),
+              width: 46,
+              height: 46,
+              child: _homeMarker(),
             ),
             Marker(
-              point: LatLng(_uLat!, _uLng!),
-              width: 64,
-              height: 64,
-              child: _homeMarker(),
+              point: LatLng(_cLat!, _cLng!),
+              width: 56,
+              height: 56,
+              child: _bikeMarker(),
             ),
           ]),
         ],
       );
 
-  Widget _carerMarker() => Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            gradient: AppColors.gradient,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 3),
-            boxShadow: AppColors.glowShadow,
-          ),
-          child: const Icon(Icons.electric_bike_rounded, color: Colors.white, size: 24),
-        ),
-        const SizedBox(height: 3),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-          decoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.4), blurRadius: 6)],
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(_carerName.split(" ").first,
-                style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.white)),
-            if (_isVerifiedCarer) ...[
-              const SizedBox(width: 4),
-              const VerifiedBadge(size: 10),
-            ],
-          ]),
-        ),
-      ]);
-
-  Widget _homeMarker() => Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: AppColors.danger,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2.5),
-            boxShadow: [
-              BoxShadow(color: AppColors.danger.withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4)),
-            ],
-          ),
-          child: const Icon(Icons.home_rounded, color: Colors.white, size: 20),
-        ),
-        const SizedBox(height: 2),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: AppColors.danger,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [BoxShadow(color: AppColors.danger.withOpacity(0.35), blurRadius: 6)],
-          ),
-          child: const Text("You",
-              style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white)),
-        ),
-      ]);
-
-  // ── Top bar (floating over map) ───────────────────────────────────
-  Widget _topBar() => Positioned(
-        top: 0,
-        left: 0,
-        right: 0,
-        child: Container(
-          padding: EdgeInsets.only(
-            top: MediaQuery.of(context).padding.top + 12,
-            left: 16,
-            right: 16,
-            bottom: 30,
-          ),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.black.withOpacity(0.45), Colors.transparent],
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-            ),
-          ),
-          child: Row(children: [
-            _circleBtn(Icons.arrow_back_rounded, () => Navigator.pop(context)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.92),
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 10)],
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF4ADE80)),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      "$_etaLabel  ·  $_distLabel",
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E)),
+  // ── Bike marker — realistic scooter icon w/ heading + pulse ─────────
+  Widget _bikeMarker() => AnimatedBuilder(
+        animation: _pulseCtrl,
+        builder: (context, _) {
+          final t = _pulseCtrl.value;
+          return SizedBox(
+            width: 56,
+            height: 56,
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                // Expanding pulse ring
+                Opacity(
+                  opacity: (1 - t).clamp(0.0, 1.0) * 0.35,
+                  child: Container(
+                    width: 20 + (36 * t),
+                    height: 20 + (36 * t),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFE23744), // Zomato-red pulse
                     ),
                   ),
-                ]),
-              ),
+                ),
+                // Shadow ellipse on the ground
+                Positioned(
+                  bottom: 2,
+                  child: Container(
+                    width: 22,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.22),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+                // Rotated scooter body
+                Transform.rotate(
+                  angle: _heading * (pi / 180),
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFE23744),
+                      border: Border.all(color: Colors.white, width: 2.6),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFE23744).withOpacity(0.45),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.two_wheeler_rounded,
+                        color: Colors.white, size: 21),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            _circleBtn(Icons.center_focus_strong_rounded, _recenter),
-            const SizedBox(width: 10),
-            _circleBtn(Icons.refresh_rounded, () => _refresh()),
-          ]),
+          );
+        },
+      );
+
+  Widget _homeMarker() => Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color(0xFF1A1A2E),
+          border: Border.all(color: Colors.white, width: 2.6),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.28),
+                blurRadius: 10,
+                offset: const Offset(0, 3)),
+          ],
         ),
+        child: const Icon(Icons.home_rounded, color: Colors.white, size: 20),
+      );
+
+  // ── Floating map controls (recenter) ─────────────────────────────
+  Widget _mapControls() => Positioned(
+        right: 14,
+        bottom: 14,
+        child: Column(children: [
+          _circleBtn(Icons.center_focus_strong_rounded, _recenter),
+        ]),
       );
 
   Widget _circleBtn(IconData icon, VoidCallback onTap) => GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(11),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.92),
+            color: _surface,
             shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 8)],
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 10)],
           ),
-          child: Icon(icon, color: const Color(0xFF1A1A2E), size: 20),
+          child: Icon(icon, color: _text, size: 20),
         ),
       );
 
-  // ── Bottom floating caretaker card ────────────────────────────────
-  Widget _bottomCard() => Positioned(
-        left: 16,
-        right: 16,
-        bottom: 22,
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: _surface,
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.14), blurRadius: 26, offset: const Offset(0, 10))],
+  // ── Bottom floating caretaker card — clean delivery-app style ─────
+  Widget _bottomCard() => Container(
+        padding: EdgeInsets.fromLTRB(
+            18, 16, 18, MediaQuery.of(context).padding.bottom + 16),
+        decoration: BoxDecoration(
+          color: _surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.10),
+                blurRadius: 20,
+                offset: const Offset(0, -6)),
+          ],
+        ),
+        child: Row(children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              gradient: AppColors.gradient,
+              shape: BoxShape.circle,
+              boxShadow: AppColors.glowShadow,
+            ),
+            child: const Icon(Icons.person_rounded, color: Colors.white, size: 27),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Container(
-                width: 52,
-                height: 52,
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(
+                  child: Text(_carerName,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800, color: _text)),
+                ),
+                if (_isVerifiedCarer) ...[
+                  const SizedBox(width: 6),
+                  const VerifiedBadge(size: 16),
+                ],
+              ]),
+              const SizedBox(height: 4),
+              Row(children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration:
+                      const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF4ADE80)),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _status == "ON_THE_WAY"
+                      ? "On the way to you"
+                      : "Assigned to your booking",
+                  style: TextStyle(color: _subText, fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+              ]),
+            ]),
+          ),
+          if (_carerPhone.isNotEmpty)
+            GestureDetector(
+              onTap: () => launchUrl(Uri.parse("tel:$_carerPhone")),
+              child: Container(
+                width: 50,
+                height: 50,
                 decoration: BoxDecoration(
                   gradient: AppColors.gradient,
                   shape: BoxShape.circle,
                   boxShadow: AppColors.glowShadow,
                 ),
-                child: const Icon(Icons.person_rounded, color: Colors.white, size: 26),
+                child: const Icon(Icons.call_rounded, size: 22, color: Colors.white),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Flexible(
-                      child: Text(_carerName,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _text)),
-                    ),
-                    if (_isVerifiedCarer) ...[
-                      const SizedBox(width: 6),
-                      const VerifiedBadge(size: 16),
-                    ],
-                  ]),
-                  const SizedBox(height: 4),
-                  Text(
-                    _status == "ON_THE_WAY" ? "On the way to you" : "Assigned to your booking",
-                    style: TextStyle(color: _subText, fontSize: 12, fontWeight: FontWeight.w500),
-                  ),
-                ]),
-              ),
-              if (_carerPhone.isNotEmpty)
-                GestureDetector(
-                  onTap: () => launchUrl(Uri.parse("tel:$_carerPhone")),
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      gradient: AppColors.gradient,
-                      shape: BoxShape.circle,
-                      boxShadow: AppColors.glowShadow,
-                    ),
-                    child: const Icon(Icons.call_rounded, size: 21, color: Colors.white),
-                  ),
-                ),
-            ]),
-          ]),
-        ),
+            ),
+        ]),
       );
 }

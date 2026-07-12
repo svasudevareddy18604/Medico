@@ -86,12 +86,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     final v = _order["feedback_given"] ??
         _order["has_feedback"] ??
         _order["rating"];
-    if (v == null) return _feedbackGiven;
+    if (v == null) return false;
     if (v is bool) return v;
     if (v is num) return v > 0;
     final s = v.toString().trim().toLowerCase();
-    if (s.isEmpty || s == "0" || s == "null") return _feedbackGiven;
-    return s == "true" || s == "1" || double.tryParse(s) != null && double.parse(s) > 0;
+    if (s.isEmpty || s == "0" || s == "null") return false;
+    return s == "true" || s == "1" || (double.tryParse(s) != null && double.parse(s) > 0);
   }
 
   bool get _hasOtp =>
@@ -174,11 +174,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   }
 
   Map<String, dynamic> get _refundPreview {
-    final method  = (_order["payment_method"] ?? "").toString();
+    final method  = (_order["payment_method"] ?? "").toString().toUpperCase();
     final pStatus = (_order["payment_status"] ?? "").toString().toUpperCase();
     final sub     = double.tryParse(_order["subtotal"]?.toString() ?? "0") ??
                     double.tryParse(_order["total"]?.toString()    ?? "0") ?? 0;
-    if (method != "RAZORPAY" || pStatus != "PAID") {
+    if (method != "ONLINE" || pStatus != "PAID") {
       return {"percent": 0, "amount": 0.0, "note": "COD bookings are not eligible for refund."};
     }
     try {
@@ -253,6 +253,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       }
     } catch (e) {
       debugPrint("ORDER DETAIL FETCH ERROR: $e");
+      debugPrint("LIVE ORDER: $_live");
     }
     if (!silent && mounted) setState(() => _loading = false);
   }
@@ -359,7 +360,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                         _blockedCancelNote(),
                       if (_completed && _order["caretaker_id"] != null) ...[
                         const SizedBox(height: 10),
-                        _feedbackAlreadyGiven ? _feedbackGivenBadge() : _feedbackBtn(),
+                        (_feedbackAlreadyGiven || _feedbackGiven) ? _feedbackGivenBadge() : _feedbackBtn(),
                       ],
                     ]),
                   ),
@@ -1511,6 +1512,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
             color: _surface,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           ),
+          child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start, children: [
 
@@ -1703,6 +1705,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
               ),
             ]),
           ]),
+          ),
         ),
       ),
     );

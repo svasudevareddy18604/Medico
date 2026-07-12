@@ -104,11 +104,15 @@ router.get("/detail/:id", async (req, res) => {
               ct.first_name         AS caregiver_name,
               ct.mobile             AS caregiver_phone,
               ct.approval_status    AS caregiver_approval_status,
-              ct.documents_uploaded AS caregiver_documents_uploaded
+              ct.documents_uploaded AS caregiver_documents_uploaded,
+              CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END AS feedback_given,
+              f.rating   AS feedback_rating,
+              f.feedback AS feedback_text
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.id
        LEFT JOIN services    s  ON s.id = oi.service_id
        LEFT JOIN users       ct ON ct.id = o.caretaker_id
+       LEFT JOIN feedback    f  ON f.order_id = o.id
        WHERE o.id = ?
        GROUP BY o.id`,
       [req.params.id]
