@@ -3,8 +3,7 @@ const sendEmail = require("../config/mailer");
 const { sendPushNotification } = require("./pushNotification.service");
 
 /* ─────────────────────────────────────────
-   PROFESSIONAL EMAIL TEMPLATE (matches
-   your existing notificationEmail style)
+   PROFESSIONAL EMAIL TEMPLATE
 ───────────────────────────────────────── */
 
 const emailTemplate = ({ title, subtitle, content, statusColor = "#4f46e5" }) => {
@@ -93,25 +92,25 @@ const emailTemplate = ({ title, subtitle, content, statusColor = "#4f46e5" }) =>
 
 /* ─────────────────────────────────────────
    FETCH USERS BY AUDIENCE
-   TODO: confirm your actual role values —
-   this assumes 'user' = careseeker,
-   'care_taker' = caretaker (matches your
-   existing bookingAlert.service.js query)
+   Confirmed role values from users table:
+   'care_seeker' and 'care_taker'
 ───────────────────────────────────────── */
 
 const getUsersByAudience = async (audience) => {
   let roles = [];
 
-  if (audience === "careseekers") roles = ["user"];
+  if (audience === "careseekers") roles = ["care_seeker"];
   else if (audience === "caretakers") roles = ["care_taker"];
-  else roles = ["user", "care_taker"]; // both
+  else roles = ["care_seeker", "care_taker"]; // both
 
   const placeholders = roles.map(() => "?").join(",");
 
   const [rows] = await db.query(
     `SELECT id, first_name, email, fcm_token, role
      FROM users
-     WHERE role IN (${placeholders})`,
+     WHERE role IN (${placeholders})
+     AND is_deleted = 0
+     AND is_blocked = 0`,
     roles
   );
 
@@ -171,8 +170,8 @@ const sendTermsUpdateNotifications = async (audience) => {
               <p style="margin-top:25px;color:#374151;">
                 Thank you for being a part of the Medico community.
               </p>
-            `
-          })
+            `,
+          }),
         });
 
         emailSent++;
@@ -187,10 +186,10 @@ const sendTermsUpdateNotifications = async (audience) => {
     totalUsers: users.length,
     emailSent,
     pushSent,
-    failed
+    failed,
   };
 };
 
 module.exports = {
-  sendTermsUpdateNotifications
+  sendTermsUpdateNotifications,
 };
