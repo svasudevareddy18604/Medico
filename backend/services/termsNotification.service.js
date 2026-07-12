@@ -138,11 +138,26 @@ const getUsersByAudience = async (audience) => {
 };
 
 /* ─────────────────────────────────────────
+   ESCAPE USER-PROVIDED TEXT
+   Prevents the admin's typed note from
+   breaking the HTML email if it contains
+   <, >, & or quotes
+───────────────────────────────────────── */
+
+const escapeHtml = (str = "") =>
+  str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+/* ─────────────────────────────────────────
    SEND TERMS UPDATE NOTIFICATIONS
 ───────────────────────────────────────── */
 
-const sendTermsUpdateNotifications = async (audience) => {
+const sendTermsUpdateNotifications = async (audience, updateNote) => {
   const users = await getUsersByAudience(audience);
+  const safeNote = escapeHtml(updateNote);
 
   let emailSent = 0;
   let pushSent = 0;
@@ -156,7 +171,7 @@ const sendTermsUpdateNotifications = async (audience) => {
         await sendPushNotification(
           u.fcm_token,
           "📋 Terms & Conditions Updated",
-          "We've updated our Terms & Conditions. Tap to review the changes."
+          updateNote.length > 90 ? `${updateNote.slice(0, 90)}…` : updateNote
         );
         pushSent++;
       }
@@ -177,41 +192,32 @@ const sendTermsUpdateNotifications = async (audience) => {
                 Hi <b>${u.first_name || "there"}</b>,
               </p>
 
-              <p style="margin:0 0 14px;">
-                We've updated our <b>Terms & Conditions</b>. Here's what you need to know:
+              <p style="margin:0 0 12px;">
+                We've made an update to our <b>Terms & Conditions</b>:
               </p>
 
               <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
                 <tr>
-                  <td style="padding:6px 0; font-size:13px; vertical-align:top; width:20px;">•</td>
-                  <td style="padding:6px 0; font-size:13px; color:#374151;">
-                    Reflects the latest changes to how our services work
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:6px 0; font-size:13px; vertical-align:top;">•</td>
-                  <td style="padding:6px 0; font-size:13px; color:#374151;">
-                    Clarifies how your information is used and protected
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:6px 0; font-size:13px; vertical-align:top;">•</td>
-                  <td style="padding:6px 0; font-size:13px; color:#374151;">
-                    Takes effect immediately
+                  <td style="
+                    padding:12px 14px;
+                    background:#f5f5fb;
+                    border-left:3px solid #4f46e5;
+                    border-radius:6px;
+                    font-size:13px;
+                    color:#374151;
+                    line-height:1.5;
+                  ">
+                    ${safeNote}
                   </td>
                 </tr>
               </table>
 
               <p style="
                 margin:0 0 16px;
-                padding:10px 12px;
-                background:#f5f5fb;
-                border-left:3px solid #4f46e5;
-                border-radius:6px;
-                font-size:12px;
-                color:#4b5563;
+                font-size:12.5px;
+                color:#6b7280;
               ">
-                Continuing to use Medico after this notice means you accept the revised terms.
+                Please review the updated Terms &amp; Conditions before continuing to use the app.
               </p>
 
               <p style="margin:0; font-size:12.5px; color:#6b7280;">

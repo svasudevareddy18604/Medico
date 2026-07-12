@@ -15,11 +15,26 @@ class AdminTermsConditionsScreen extends StatefulWidget {
 }
 
 class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen> {
+  final TextEditingController _noteController = TextEditingController();
+
   TermsAudience _audience = TermsAudience.both;
   bool _sending = false;
 
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
   Future<void> _notifyUsers() async {
-    final confirmed = await _confirmDialog();
+    final note = _noteController.text.trim();
+
+    if (note.isEmpty) {
+      _showSnack("Please describe what was updated", isError: true);
+      return;
+    }
+
+    final confirmed = await _confirmDialog(note);
     if (confirmed != true) return;
 
     setState(() => _sending = true);
@@ -27,7 +42,10 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
       final res = await http.post(
         Uri.parse(Api.notifyTermsUpdate),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"audience": _audience.name}),
+        body: jsonEncode({
+          "audience": _audience.name,
+          "updateNote": note,
+        }),
       );
 
       if (res.statusCode == 200) {
@@ -36,6 +54,7 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
           "Notified ${data['totalUsers'] ?? ''} users • "
           "${data['emailSent'] ?? 0} emails, ${data['pushSent'] ?? 0} push sent",
         );
+        _noteController.clear();
       } else {
         _showSnack("Failed to notify users (${res.statusCode}).", isError: true);
       }
@@ -46,7 +65,7 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
     }
   }
 
-  Future<bool?> _confirmDialog() {
+  Future<bool?> _confirmDialog(String note) {
     final audienceLabel = switch (_audience) {
       TermsAudience.both => "all careseekers and caretakers",
       TermsAudience.careseekers => "careseekers only",
@@ -57,9 +76,25 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Confirm Notification", style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Text(
-          "This will send an email and in-app push notification to $audienceLabel, "
-          "informing them that the Terms & Conditions have been updated. Continue?",
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("This will send an email and in-app push notification to $audienceLabel:"),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                "\"$note\"",
+                style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic),
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -104,6 +139,10 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _codeNote(),
+                  const SizedBox(height: 22),
+                  _sectionTitle("What Was Updated?"),
+                  const SizedBox(height: 10),
+                  _noteField(),
                   const SizedBox(height: 22),
                   _sectionTitle("Notify Which Users?"),
                   const SizedBox(height: 10),
@@ -180,12 +219,39 @@ class _AdminTermsConditionsScreenState extends State<AdminTermsConditionsScreen>
           Expanded(
             child: Text(
               "Terms & Conditions content is managed directly in code. "
-              "This screen only sends an update notification to users after you've "
-              "deployed the change.",
+              "Describe what changed below — it will be included in the email "
+              "sent to users after you've deployed the change.",
               style: TextStyle(fontSize: 12, color: Colors.indigo.shade900, height: 1.4),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _noteField() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: TextField(
+        controller: _noteController,
+        maxLines: 4,
+        minLines: 3,
+        style: const TextStyle(fontSize: 13.5, height: 1.5),
+        decoration: InputDecoration(
+          contentPadding: const EdgeInsets.all(16),
+          hintText: "e.g. We updated our security features to better protect your data.",
+          hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 12.5),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide.none,
+          ),
+        ),
       ),
     );
   }

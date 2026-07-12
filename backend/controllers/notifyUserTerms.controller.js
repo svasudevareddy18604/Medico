@@ -4,7 +4,7 @@ const VALID_AUDIENCES = ["both", "careseekers", "caretakers"];
 
 const notifyTermsUpdate = async (req, res) => {
   try {
-    const { audience } = req.body;
+    const { audience, updateNote } = req.body;
 
     if (!audience || !VALID_AUDIENCES.includes(audience)) {
       return res.status(400).json({
@@ -13,7 +13,14 @@ const notifyTermsUpdate = async (req, res) => {
       });
     }
 
-    const result = await sendTermsUpdateNotifications(audience);
+    if (!updateNote || !updateNote.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "updateNote is required — describe what changed in the Terms & Conditions.",
+      });
+    }
+
+    const result = await sendTermsUpdateNotifications(audience, updateNote.trim());
 
     return res.status(200).json({
       success: true,
