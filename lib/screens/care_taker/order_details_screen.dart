@@ -41,6 +41,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
   bool _screenshotBlocked = false;
 
+  // ✅ NEW: collapses the full booking-details card (category, services,
+  // date, slot, location, payment method) behind a "View Full Booking
+  // Details" toggle so the page reads clean by default.
+  bool _detailsExpanded = false;
+
   late AnimationController _docPulse;
   late Animation<double>   _docGlow;
 
@@ -84,6 +89,26 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       _rawDocUrls.isNotEmpty && _rawDocUrls != "null" && _rawDocUrls != "NULL";
   List<String> get _docUrls =>
       _rawDocUrls.split("|||").where((u) => u.trim().isNotEmpty).toList();
+
+  // ── Emergency contact (careseeker's) ───────────────────────────
+  // ✅ only meaningful once the backend gate lets these fields through —
+  // which happens ONLY when status is ON_THE_WAY AND the arrival OTP has
+  // been verified. We still re-check both conditions client-side as a
+  // second layer, and — on top of that — we no longer print the details
+  // straight onto the page. See _emergencyContactPrompt /
+  // _showEmergencyContactSheet below: the actual name/number only render
+  // once the caretaker deliberately taps to reveal them.
+  String get _emergencyName =>
+      (_data["emergency_name"] ?? "").toString().trim();
+  String get _emergencyRelationship =>
+      (_data["emergency_relationship"] ?? "").toString().trim();
+  String get _emergencyPhone =>
+      (_data["emergency_phone"] ?? "").toString().trim();
+  String get _emergencyAltPhone =>
+      (_data["emergency_alt_phone"] ?? "").toString().trim();
+
+  bool get _showEmergencyContact =>
+      _onTheWay && _otpVerified && _emergencyName.isNotEmpty;
 
   // ── Customer location ────────────────────────────────────────
   LatLng get _loc {
@@ -414,6 +439,17 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       Uri.parse("google.navigation:q=${_loc.latitude},${_loc.longitude}"),
       mode: LaunchMode.externalApplication);
 
+  Future<void> _callNumber(String phone) async {
+    if (phone.isEmpty) return;
+    final uri = Uri(scheme: "tel", path: phone);
+    try {
+      final ok = await launchUrl(uri);
+      if (!ok) _toast("Could not open dialer", type: _ToastType.error);
+    } catch (_) {
+      _toast("Could not open dialer", type: _ToastType.error);
+    }
+  }
+
   // ── CTA logic ────────────────────────────────────────────────
   String get _ctaLabel {
     if (_isCompleted) return "Service Completed";
@@ -740,7 +776,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                       )),
                       if (phone.isNotEmpty)
                         GestureDetector(
-                          onTap: () => launchUrl(Uri.parse("tel:$phone")),
+                          onTap: () => _callNumber(phone),
                           child: Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
@@ -753,27 +789,56 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                     ])),
                   const SizedBox(height: 12),
 
-                  // ── Booking details card ───────────────────────────
+                  // ── Emergency contact — reveal on demand ───────────
+                  // Only ever eligible once the caretaker has verified the
+                  // arrival OTP while ON_THE_WAY (see _showEmergencyContact).
+                  // Even then, we don't print the name/number straight onto
+                  // the page — we show a compact prompt and only pull the
+                  // actual contact details into view inside a sheet when the
+                  // caretaker deliberately taps for it, i.e. only when it's
+                  // genuinely required.
+                  if (_showEmergencyContact) ...[
+                    _emergencyContactPrompt(),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // ── Booking summary — always visible, kept minimal ──
                   _card(child: Column(children: [
                     if (_code.isNotEmpty)
                       _copyableRow("Booking ID", _code),
-                    if (category.isNotEmpty)
-                      _row("Category",    category),
-                    if (services.isNotEmpty)
-                      _rowMultiline("Services", services),
-                    _row("Date",       date),
-                    if (slot != "—")
-                      _row("Time Slot", slot),
-                    if (!_isCompleted)
-                      _row("Location", location),
-                    _row("Amount",     "₹$total"),
-                    _row("Payment",    payMethod),
+                    _row("Amount", "₹$total", highlight: true),
                     _row("Pay Status", payStatus,
                         valueColor: payStatus.toUpperCase() == "PAID"
                             ? AppColors.primary
                             : _amber,
                         isLast: true),
                   ])),
+                  const SizedBox(height: 10),
+
+                  // ── Toggle for the rest of the booking details ─────
+                  _bookingDetailsToggle(),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeInOut,
+                    alignment: Alignment.topCenter,
+                    child: _detailsExpanded
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: _card(child: Column(children: [
+                              if (category.isNotEmpty)
+                                _row("Category", category),
+                              if (services.isNotEmpty)
+                                _rowMultiline("Services", services),
+                              _row("Date", date),
+                              if (slot != "—")
+                                _row("Time Slot", slot),
+                              if (!_isCompleted)
+                                _row("Location", location),
+                              _row("Payment", payMethod, isLast: true),
+                            ])),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
                   const SizedBox(height: 14),
 
                   // ── Location locked banner — when COMPLETED ────────
@@ -1118,7 +1183,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                         Icons.phone_rounded,
                         "Call",
                         AppColors.primary,
-                        phone.isEmpty ? null : () => launchUrl(Uri.parse("tel:$phone")),
+                        phone.isEmpty ? null : () => _callNumber(phone),
                       ),
                   ]),
                   const SizedBox(height: 12),
@@ -1228,6 +1293,258 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       ),
     );
   }
+
+  // ── Booking details toggle ──────────────────────────────────────
+  // Compact tap target that expands/collapses the secondary booking
+  // fields (category, services, date, slot, location, payment method).
+  // Keeps the page scannable by default; the caretaker opts in to the
+  // full breakdown only when they actually want it.
+  Widget _bookingDetailsToggle() => GestureDetector(
+        onTap: () => setState(() => _detailsExpanded = !_detailsExpanded),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: _detailsExpanded
+                ? AppColors.primary.withOpacity(0.08)
+                : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: _detailsExpanded
+                  ? AppColors.primary.withOpacity(0.35)
+                  : Colors.grey.shade200,
+            ),
+            boxShadow: _detailsExpanded
+                ? []
+                : [BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2))],
+          ),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: const Icon(Icons.receipt_long_rounded,
+                  size: 16, color: AppColors.primary),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Text(
+                _detailsExpanded
+                    ? "Hide Full Booking Details"
+                    : "View Full Booking Details",
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87),
+              ),
+            ),
+            AnimatedRotation(
+              turns: _detailsExpanded ? 0.5 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: const Icon(Icons.keyboard_arrow_down_rounded,
+                  color: AppColors.primary, size: 22),
+            ),
+          ]),
+        ),
+      );
+
+  // ── Emergency Contact — compact prompt (tap to reveal) ────────
+  // Deliberately does NOT print the name/number on the page. It only
+  // signals that an emergency contact exists for this leg of the
+  // booking; the caretaker has to tap through to actually see it.
+  Widget _emergencyContactPrompt() => GestureDetector(
+        onTap: _showEmergencyContactSheet,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            color: _red.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _red.withOpacity(0.30), width: 1.2),
+          ),
+          child: Row(children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: _red.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: const Icon(Icons.emergency_rounded, color: _red, size: 19),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text("Emergency Contact Available",
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black87)),
+                SizedBox(height: 2),
+                Text("Tap to view — only when genuinely needed",
+                    style: TextStyle(fontSize: 11, color: Colors.grey)),
+              ]),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: _red,
+                borderRadius: BorderRadius.circular(9),
+                boxShadow: [BoxShadow(
+                    color: _red.withOpacity(0.30),
+                    blurRadius: 6,
+                    offset: const Offset(0, 3))],
+              ),
+              child: const Text("View",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12)),
+            ),
+          ]),
+        ),
+      );
+
+  // Opens a bottom sheet with the actual emergency contact details.
+  // This is the one and only place those details render — nowhere
+  // else on the page shows the name/number directly.
+  void _showEmergencyContactSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          _emergencyContactCard(),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => Navigator.pop(context),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                side: BorderSide(color: Colors.grey.shade300),
+              ),
+              child: Text("Close",
+                  style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // ── Emergency Contact Card (rendered only inside the sheet) ────
+  // Red/amber themed so it visually reads as distinct from the teal
+  // client card — "this is not the client, this is who to call if
+  // something goes wrong". Renders one Call chip per number.
+  Widget _emergencyContactCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _red.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _red.withOpacity(0.30), width: 1.4),
+          boxShadow: [BoxShadow(
+              color: _red.withOpacity(0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 3))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              width: 38, height: 38,
+              decoration: BoxDecoration(
+                color: _red.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: const Icon(Icons.emergency_rounded, color: _red, size: 20),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                "EMERGENCY CONTACT",
+                style: TextStyle(
+                  color: _red,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_emergencyName,
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87)),
+                if (_emergencyRelationship.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(_emergencyRelationship,
+                        style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600)),
+                  ),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          if (_emergencyPhone.isNotEmpty)
+            _emergencyCallRow("Primary", _emergencyPhone),
+          if (_emergencyAltPhone.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _emergencyCallRow("Alternate", _emergencyAltPhone),
+          ],
+        ]),
+      );
+
+  Widget _emergencyCallRow(String label, String phone) => Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(fontSize: 10.5, color: Colors.grey.shade500, letterSpacing: 0.3)),
+            Text(phone,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87)),
+          ]),
+        ),
+        GestureDetector(
+          onTap: () => _callNumber(phone),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: BoxDecoration(
+              color: _red,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [BoxShadow(
+                  color: _red.withOpacity(0.30), blurRadius: 8, offset: const Offset(0, 3))],
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.call_rounded, color: Colors.white, size: 15),
+              SizedBox(width: 6),
+              Text("Call", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+            ]),
+          ),
+        ),
+      ]);
 
   // ── Location Restricted Box (themed) ───────────────────────────
   Widget _locationRestrictedBox({
@@ -1411,18 +1728,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       );
 
   // ── Status Stepper (redesigned) ────────────────────────────────
-  // 5 steps: Accepted → On The Way → Verified → Payment → Completed.
-  // Redesign goals vs. the old version:
-  //  • Smaller, tighter dots (30px) with icons instead of bare check
-  //    marks, so nothing overlaps/cramps on narrow phone widths.
-  //  • Connector line is a single continuous strip built with
-  //    dot/line/dot/line/dot instead of duplicated per-item lines,
-  //    so segments always align perfectly and never double up.
-  //  • The current in-progress step gets a distinct glowing ring
-  //    (blue) so it's obvious where you are, not just "done vs not".
-  //  • Labels sit in their own row below with a fixed 2-line height,
-  //    small caps-ish weight change, so "On The Way" never collides
-  //    with the neighbouring step's label.
   Widget _statusStepper() {
     final steps = <_StepInfo>[
       _StepInfo("Accepted",   Icons.handshake_rounded,      !_notAccepted),
@@ -1432,8 +1737,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       _StepInfo("Completed",  Icons.done_all_rounded,       _isCompleted),
     ];
 
-    // Index of the first not-yet-done step = the "current" step.
-    // If everything is done, there is no current step (-1).
     int current = steps.indexWhere((s) => !s.done);
 
     return _card(
@@ -1442,7 +1745,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: List.generate(steps.length * 2 - 1, (idx) {
-              // Even indices are dots, odd indices are connector lines.
               if (idx.isEven) {
                 final i = idx ~/ 2;
                 return _stepDot(

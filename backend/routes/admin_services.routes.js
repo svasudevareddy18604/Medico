@@ -11,6 +11,10 @@ const {
   CloudinaryStorage,
 } = require("multer-storage-cloudinary");
 
+const {
+  sendPushNotification,
+} = require("../utils/notifications"); // ⚠️ adjust path to match where you saved the notification helpers
+
 /* =========================================
    CLOUDINARY STORAGE
 ========================================= */
@@ -52,45 +56,76 @@ const safe = (v) =>
 
 const fmt = (s) => ({
   id: s.id,
-
   name: s.name,
-
   category: s.category,
-
   service_type: s.service_type,
-
   price: s.price,
-
   price_type: s.price_type,
-
-  description:
-    s.description || "",
-
-  includes:
-    s.includes || "",
-
-  excludes:
-    s.excludes || "",
-
-  requirements:
-    s.requirements || "",
-
-  duration:
-    s.duration || "",
-
-  image:
-    s.image || "",
-
+  description: s.description || "",
+  includes: s.includes || "",
+  excludes: s.excludes || "",
+  requirements: s.requirements || "",
+  duration: s.duration || "",
+  image: s.image || "",
   recommended:
     s.recommended === 1 ||
     s.recommended === true,
-
   active: s.active,
-
   requires_documents:
     s.requires_documents === 1 ||
     s.requires_documents === true,
 });
+
+/* =========================================
+   NOTIFY ALL CARE SEEKERS
+   (new service published)
+========================================= */
+
+const notifyCareSeekersOfNewService = async (service) => {
+  try {
+    const [careSeekers] = await db.query(
+      `
+      SELECT id, fcm_token
+      FROM users
+      WHERE role = 'care_seeker'
+      AND is_blocked = 0
+      AND is_deleted = 0
+      AND fcm_token IS NOT NULL
+      `
+    );
+
+    if (!careSeekers.length) {
+      console.log("ℹ️ No care seekers with valid FCM tokens to notify.");
+      return;
+    }
+
+    const title = "New Service Available";
+
+    const body = `${service.name} is now available on Medico. Explore the details and book with a trusted caretaker today.`;
+
+    console.log(
+      `📣 Notifying ${careSeekers.length} care seeker(s) about new service "${service.name}"`
+    );
+
+    // Send concurrently, but don't let one failure block the others
+    const results = await Promise.allSettled(
+      careSeekers.map((user) =>
+        sendPushNotification(user.fcm_token, title, body)
+      )
+    );
+
+    const failed = results.filter((r) => r.status === "rejected").length;
+
+    if (failed > 0) {
+      console.log(
+        `⚠️ ${failed} notification(s) failed to send out of ${careSeekers.length}`
+      );
+    }
+  } catch (err) {
+    // Notification failures should never break the service-creation flow
+    console.error("Error notifying care seekers:", err);
+  }
+};
 
 /* =========================================
    GET ALL ACTIVE SERVICES
@@ -107,14 +142,9 @@ router.get("/", async (req, res) => {
       `
     );
 
-    return res.json(
-      rows.map(fmt)
-    );
+    return res.json(rows.map(fmt));
   } catch (err) {
-    console.error(
-      "GET /services:",
-      err
-    );
+    console.error("GET /services:", err);
 
     return res.status(500).json({
       message: "DB error",
@@ -126,36 +156,29 @@ router.get("/", async (req, res) => {
    GET RECOMMENDED
 ========================================= */
 
-router.get(
-  "/recommended",
-  async (req, res) => {
-    try {
-      const [rows] = await db.query(
-        `
-        SELECT *
-        FROM services
-        WHERE active = 1
-        AND recommended = 1
-        ORDER BY id DESC
-        `
-      );
+router.get("/recommended", async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `
+      SELECT *
+      FROM services
+      WHERE active = 1
+      AND recommended = 1
+      ORDER BY id DESC
+      `
+    );
 
-      return res.json({
-        services:
-          rows.map(fmt),
-      });
-    } catch (err) {
-      console.error(
-        "GET /services/recommended:",
-        err
-      );
+    return res.json({
+      services: rows.map(fmt),
+    });
+  } catch (err) {
+    console.error("GET /services/recommended:", err);
 
-      return res.status(500).json({
-        message: "DB error",
-      });
-    }
+    return res.status(500).json({
+      message: "DB error",
+    });
   }
-);
+});
 
 /* =========================================
    ADD SERVICE
@@ -163,22 +186,13 @@ router.get(
 
 router.post(
   "/",
-
   upload.single("image"),
-
   async (req, res) => {
     try {
-      const imageUrl =
-        req.file
-          ? req.file.path
-          : null;
+      const imageUrl = req.file ? req.file.path : null;
+      const cloudinaryId = req.file ? req.file.filename : null;
 
-      const cloudinaryId =
-        req.file
-          ? req.file.filename
-          : null;
-
-      await db.query(
+      const [result] = await db.query(
         `
         INSERT INTO services
         (
@@ -203,52 +217,36 @@ router.post(
         `,
         [
           safe(req.body.name),
-
           safe(req.body.category),
-
           safe(req.body.service_type),
-
           safe(req.body.price),
-
           safe(req.body.price_type),
-
           safe(req.body.description),
-
           safe(req.body.duration),
-
           safe(req.body.includes),
-
           safe(req.body.excludes),
-
           safe(req.body.requirements),
-
           imageUrl,
-
           cloudinaryId,
-
-          req.body.recommended == "1"
-            ? 1
-            : 0,
-
-          req.body
-            .requires_documents ==
-          "1"
-            ? 1
-            : 0,
+          req.body.recommended == "1" ? 1 : 0,
+          req.body.requires_documents == "1" ? 1 : 0,
         ]
       );
 
-      return res.json({
+      // Respond to the client immediately — don't make them wait on notification fan-out
+      res.json({
         success: true,
+        message: "Service added successfully",
+        id: result.insertId,
+      });
 
-        message:
-          "Service added successfully",
+      // Fire-and-forget: notify all care seekers after responding
+      notifyCareSeekersOfNewService({
+        id: result.insertId,
+        name: safe(req.body.name),
       });
     } catch (err) {
-      console.error(
-        "POST /services:",
-        err
-      );
+      console.error("POST /services:", err);
 
       return res.status(500).json({
         message: "DB error",
@@ -263,140 +261,77 @@ router.post(
 
 router.put(
   "/:id",
-
   upload.single("image"),
-
   async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const { id } = req.params;
 
       let imageUrl = null;
-
       let cloudinaryId = null;
 
-      /* =========================================
-         NEW IMAGE
-      ========================================= */
-
       if (req.file) {
-        imageUrl =
-          req.file.path;
+        imageUrl = req.file.path;
+        cloudinaryId = req.file.filename;
 
-        cloudinaryId =
-          req.file.filename;
+        const [old] = await db.query(
+          `
+          SELECT cloudinary_id
+          FROM services
+          WHERE id = ?
+          `,
+          [id]
+        );
 
-        const [old] =
-          await db.query(
-            `
-            SELECT cloudinary_id
-            FROM services
-            WHERE id = ?
-            `,
-            [id]
-          );
-
-        if (
-          old.length &&
-          old[0].cloudinary_id
-        ) {
-          await cloudinary.uploader.destroy(
-            old[0]
-              .cloudinary_id
-          );
+        if (old.length && old[0].cloudinary_id) {
+          await cloudinary.uploader.destroy(old[0].cloudinary_id);
         }
       }
-
-      /* =========================================
-         UPDATE
-      ========================================= */
 
       await db.query(
         `
         UPDATE services
         SET
-
         name = ?,
-
         category = ?,
-
         service_type = ?,
-
         price = ?,
-
         price_type = ?,
-
         description = ?,
-
         duration = ?,
-
         includes = ?,
-
         excludes = ?,
-
         requirements = ?,
-
         recommended = ?,
-
         requires_documents = ?,
-
         image = IFNULL(?, image),
-
         cloudinary_id = IFNULL(?, cloudinary_id)
-
         WHERE id = ?
         `,
         [
           safe(req.body.name),
-
           safe(req.body.category),
-
           safe(req.body.service_type),
-
           safe(req.body.price),
-
           safe(req.body.price_type),
-
           safe(req.body.description),
-
           safe(req.body.duration),
-
           safe(req.body.includes),
-
           safe(req.body.excludes),
-
           safe(req.body.requirements),
-
-          req.body.recommended ==
-          "1"
-            ? 1
-            : 0,
-
-          req.body
-            .requires_documents ==
-          "1"
-            ? 1
-            : 0,
-
+          req.body.recommended == "1" ? 1 : 0,
+          req.body.requires_documents == "1" ? 1 : 0,
           imageUrl,
-
           cloudinaryId,
-
           id,
         ]
       );
 
       return res.json({
         success: true,
-
-        message:
-          "Service updated successfully",
+        message: "Service updated successfully",
       });
     } catch (err) {
-      console.error(
-        "PUT /services/:id:",
-        err
-      );
+      console.error("PUT /services/:id:", err);
 
       return res.status(500).json({
         message: "DB error",
@@ -409,95 +344,68 @@ router.put(
    TOGGLE ACTIVE
 ========================================= */
 
-router.put(
-  "/toggle/:id",
+router.put("/toggle/:id", async (req, res) => {
+  try {
+    await db.query(
+      `
+      UPDATE services
+      SET active = IF(active = 1, 0, 1)
+      WHERE id = ?
+      `,
+      [req.params.id]
+    );
 
-  async (req, res) => {
-    try {
-      await db.query(
-        `
-        UPDATE services
-        SET active =
-          IF(active = 1, 0, 1)
-        WHERE id = ?
-        `,
-        [req.params.id]
-      );
+    return res.json({
+      success: true,
+      message: "Service status updated",
+    });
+  } catch (err) {
+    console.error("TOGGLE:", err);
 
-      return res.json({
-        success: true,
-
-        message:
-          "Service status updated",
-      });
-    } catch (err) {
-      console.error(
-        "TOGGLE:",
-        err
-      );
-
-      return res.status(500).json({
-        message: "DB error",
-      });
-    }
+    return res.status(500).json({
+      message: "DB error",
+    });
   }
-);
+});
 
 /* =========================================
    DELETE
 ========================================= */
 
-router.delete(
-  "/:id",
+router.delete("/:id", async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `
+      SELECT cloudinary_id
+      FROM services
+      WHERE id = ?
+      `,
+      [req.params.id]
+    );
 
-  async (req, res) => {
-    try {
-      const [rows] =
-        await db.query(
-          `
-          SELECT cloudinary_id
-          FROM services
-          WHERE id = ?
-          `,
-          [req.params.id]
-        );
-
-      if (
-        rows.length &&
-        rows[0]
-          .cloudinary_id
-      ) {
-        await cloudinary.uploader.destroy(
-          rows[0]
-            .cloudinary_id
-        );
-      }
-
-      await db.query(
-        `
-        DELETE FROM services
-        WHERE id = ?
-        `,
-        [req.params.id]
-      );
-
-      return res.json({
-        success: true,
-
-        message:
-          "Deleted successfully",
-      });
-    } catch (err) {
-      console.error(
-        "DELETE:",
-        err
-      );
-
-      return res.status(500).json({
-        message: "DB error",
-      });
+    if (rows.length && rows[0].cloudinary_id) {
+      await cloudinary.uploader.destroy(rows[0].cloudinary_id);
     }
+
+    await db.query(
+      `
+      DELETE FROM services
+      WHERE id = ?
+      `,
+      [req.params.id]
+    );
+
+    return res.json({
+      success: true,
+      message: "Deleted successfully",
+    });
+  } catch (err) {
+    console.error("DELETE:", err);
+
+    return res.status(500).json({
+      message: "DB error",
+    });
   }
-);
+});
 
 module.exports = router;

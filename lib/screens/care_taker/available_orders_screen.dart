@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'dart:async';
+import 'package:screen_protector/screen_protector.dart';
 import '../../config/api.dart';
 import 'order_details_screen.dart';
 
@@ -30,14 +31,36 @@ class _AvailableOrdersScreenState extends State<AvailableOrdersScreen>
   @override
   void initState() {
     super.initState();
+    _enableScreenProtection();
     _anim  = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     _fade  = CurvedAnimation(parent: _anim, curve: Curves.easeOut);
     _load();
     _timer = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
   }
 
+  // Blocks screenshots / screen recording while this screen is visible
+  // (order codes, amounts, and customer booking details are sensitive).
+  Future<void> _enableScreenProtection() async {
+    try {
+      await ScreenProtector.preventScreenshotOn();
+    } catch (_) {
+      // Fails silently on unsupported platforms (e.g. web/desktop)
+    }
+  }
+
+  Future<void> _disableScreenProtection() async {
+    try {
+      await ScreenProtector.preventScreenshotOff();
+    } catch (_) {}
+  }
+
   @override
-  void dispose() { _timer?.cancel(); _anim.dispose(); super.dispose(); }
+  void dispose() {
+    _timer?.cancel();
+    _anim.dispose();
+    _disableScreenProtection();
+    super.dispose();
+  }
 
   Future<void> _load({bool silent = false}) async {
     try {
@@ -84,7 +107,6 @@ class _AvailableOrdersScreenState extends State<AvailableOrdersScreen>
     final code     = (order["order_code"] ?? "").toString();
     final services = (order["services"]   ?? "").toString();
     final category = (order["category"]   ?? "").toString();
-    final location = (order["location"]   ?? "").toString();
     final slot     = (order["slot"]       ?? "").toString();
     final total    = (order["total"]      ?? 0).toString();
     final payMethod= (order["payment_method"] ?? "COD").toString();
@@ -143,9 +165,7 @@ class _AvailableOrdersScreenState extends State<AvailableOrdersScreen>
                       color: _primary, fontSize: 12, fontWeight: FontWeight.w600)),
                 ),
 
-              // Info rows
-              _infoRow(Icons.location_on_rounded, location),
-              const SizedBox(height: 6),
+              // Info rows (location/address intentionally omitted here)
               _infoRow(Icons.calendar_today_rounded, date),
               const SizedBox(height: 6),
               _infoRow(Icons.access_time_rounded, slot),
