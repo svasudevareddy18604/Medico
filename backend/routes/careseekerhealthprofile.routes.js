@@ -95,6 +95,11 @@ router.post("/", async (req, res) => {
         ]
       );
 
+      await db.query(
+        "UPDATE users SET health_profile_completed = 1, health_profile_skipped = 0 WHERE id = ?",
+        [user_id]
+      );
+
       return res.json({
         success: true,
         message: "Health profile updated successfully",
@@ -143,6 +148,11 @@ router.post("/", async (req, res) => {
       ]
     );
 
+    await db.query(
+      "UPDATE users SET health_profile_completed = 1, health_profile_skipped = 0 WHERE id = ?",
+      [user_id]
+    );
+
     return res.json({
       success: true,
       message: "Health profile saved successfully",
@@ -183,6 +193,11 @@ router.post("/skip", async (req, res) => {
         [user_id]
       );
     }
+
+    await db.query(
+      "UPDATE users SET health_profile_skipped = 1 WHERE id = ?",
+      [user_id]
+    );
 
     return res.json({
       success: true,
