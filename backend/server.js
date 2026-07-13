@@ -17,6 +17,7 @@ const servicesRoutes = require("./routes/services.routes");
 const nearbyCaretakersRoutes = require("./routes/nearbyCaretakers.routes");
 const feedbackRoutes = require("./routes/careseekerfeedback.routes");
 const notifyUserTermsRoutes = require("./routes/notifyUserTerms.routes");
+const careSeekerHealthProfileRoutes = require("./routes/careseekerhealthprofile.routes");
 
 const cartRoutes = require("./routes/cart.routes");
 const slotRoutes = require("./routes/slots.routes");
@@ -94,6 +95,8 @@ app.use(
     limit: "10mb",
   })
 );
+
+app.use("/api/health-profile", careSeekerHealthProfileRoutes);
 
 /* =========================================
    UPLOAD FOLDER
