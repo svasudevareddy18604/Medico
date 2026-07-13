@@ -181,7 +181,11 @@ router.post("/reset-status/:userId", async (req, res) => {
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/order-detail/:id
    ✅ Includes document_urls, document_types, document_keys
-   ✅ NEW: Includes emergency contact — ONLY when order is ON_THE_WAY
+   ✅ Includes o.user_id — REQUIRED by the app to open the
+      careseeker's Health Details screen (CareseekerHealthDetailsViewScreen
+      reads _careseekerId from this field). Without it the app showed
+      "Careseeker not found for this booking".
+   ✅ Includes emergency contact — ONLY when order is ON_THE_WAY
       (service actively started). Hidden before (ACCEPTED/CONFIRMED)
       and after (COMPLETED/CANCELLED) automatically, server-side.
 ═══════════════════════════════════════════════════════════ */
@@ -191,6 +195,7 @@ router.get("/order-detail/:id", async (req, res) => {
       `
       SELECT
         o.id,
+        o.user_id,
         o.order_code,
         o.category,
         o.location,
@@ -264,15 +269,15 @@ router.get("/order-detail/:id", async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
 
     // 🔒 EMERGENCY CONTACT VISIBILITY GATE
-// Only expose emergency contact once the caretaker has verified arrival OTP
-// (proves they're actually on-site), not just "started journey".
-if (order.status !== "ON_THE_WAY" || order.otp_verified !== 1) {
-  order.emergency_name         = null;
-  order.emergency_relationship = null;
-  order.emergency_phone        = null;
-  order.emergency_alt_phone    = null;
-}
-    
+    // Only expose emergency contact once the caretaker has verified arrival OTP
+    // (proves they're actually on-site), not just "started journey".
+    if (order.status !== "ON_THE_WAY" || order.otp_verified !== 1) {
+      order.emergency_name         = null;
+      order.emergency_relationship = null;
+      order.emergency_phone        = null;
+      order.emergency_alt_phone    = null;
+    }
+
     console.log("🔥 ORDER DETAIL RESPONSE:", order);
 
     return res.json({ success: true, data: order });
@@ -284,11 +289,13 @@ if (order.status !== "ON_THE_WAY" || order.otp_verified !== 1) {
 
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/orders
+   ✅ o.user_id added to SELECT + GROUP BY — used as the initial
+      widget.order fallback for careseeker health details.
 ═══════════════════════════════════════════════════════════ */
 router.get("/orders", async (req, res) => {
   try {
     const [orders] = await db.query(`
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.status, o.caretaker_id,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
@@ -296,7 +303,7 @@ router.get("/orders", async (req, res) => {
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.status = 'CONFIRMED' AND o.caretaker_id IS NULL
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
                o.status, o.caretaker_id
       ORDER BY o.created_at ASC
@@ -310,11 +317,12 @@ router.get("/orders", async (req, res) => {
 
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/orders/:category
+   ✅ o.user_id added to SELECT + GROUP BY
 ═══════════════════════════════════════════════════════════ */
 router.get("/orders/:category", async (req, res) => {
   try {
     const [orders] = await db.query(`
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.status, o.caretaker_id,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
@@ -322,7 +330,7 @@ router.get("/orders/:category", async (req, res) => {
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.status = 'CONFIRMED' AND o.caretaker_id IS NULL AND o.category = ?
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
                o.status, o.caretaker_id
       ORDER BY o.created_at ASC
@@ -962,19 +970,20 @@ router.post("/complete", async (req, res) => {
 
 /* ═══════════════════════════════════════════════════════════
    GET /caretaker/my-jobs/:caretakerId
+   ✅ o.user_id added to SELECT + GROUP BY
 ═══════════════════════════════════════════════════════════ */
 router.get("/my-jobs/:caretakerId", async (req, res) => {
   try {
     const [jobs] = await db.query(
       `
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.caretaker_id = ? AND o.status != 'CANCELLED'
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method
       ORDER BY o.created_at DESC
       `,

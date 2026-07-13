@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'package:medico/main.dart';
 import '../../config/api.dart';
+import 'careseeker_profile_report_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final int userId;
@@ -117,6 +118,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ── NEW: Navigation tile to the full health profile report ────────────
+  Widget _healthProfileTile() {
+    final bg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final border = isDark ? const Color(0xFF2D3748) : const Color(0xFFF1F5F9);
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CareSeekerProfileReportScreen(userId: widget.userId),
+          ),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(top: 8, bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        decoration: BoxDecoration(
+          gradient: AppColors.gradient,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 14, offset: const Offset(0, 6)),
+          ],
+        ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.18), borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.favorite_rounded, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("My Health Profile",
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+                SizedBox(height: 3),
+                Text("View & edit your full health report",
+                    style: TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.w500)),
+              ],
+            ),
+          ),
+          const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 15),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bg = isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
@@ -131,7 +180,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Scaffold(
       backgroundColor: bg,
       body: Column(children: [
-        // Header
         Container(
           padding: const EdgeInsets.fromLTRB(16, 50, 20, 24),
           decoration: BoxDecoration(
@@ -166,6 +214,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _infoTile("Email Address", user["email"] ?? "", Icons.email_outlined),
             _infoTile("Role", user["role"] ?? "", Icons.badge_outlined),
             _infoTile("Mobile", user["mobile"] ?? "", Icons.phone_outlined),
+
+            const SizedBox(height: 8),
+            _healthProfileTile(),
           ]),
         )),
       ]),

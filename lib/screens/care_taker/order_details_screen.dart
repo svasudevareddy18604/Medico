@@ -11,6 +11,7 @@ import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
 import 'caretaker_payment_screen.dart';
 import 'caretaker_otp_screen.dart';
+import 'careseeker_health_details_view_screen.dart';
 
 class OrderDetailsScreen extends StatefulWidget {
   final Map  order;
@@ -41,9 +42,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
   bool _screenshotBlocked = false;
 
-  // ✅ NEW: collapses the full booking-details card (category, services,
-  // date, slot, location, payment method) behind a "View Full Booking
-  // Details" toggle so the page reads clean by default.
   bool _detailsExpanded = false;
 
   late AnimationController _docPulse;
@@ -52,6 +50,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   // ── Helpers ──────────────────────────────────────────────────
   dynamic get _orderId => widget.order["id"];
   int     get _userId  => widget.userId;
+
+  // Careseeker's own user_id — required to open their health profile.
+  // Comes from either the live-fetched order payload or the initial
+  // order map passed into this screen.
+  dynamic get _careseekerId => _data["user_id"] ?? widget.order["user_id"];
 
   String get _status =>
       (_data["status"] ?? widget.order["status"] ?? "").toString().toUpperCase();
@@ -70,10 +73,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   bool get _isCOD  => (_data["payment_method"] ?? widget.order["payment_method"] ?? "COD")
       .toString().toUpperCase() == "COD";
 
-  // Arrival OTP: 1/true once the caretaker has verified the OTP shown to
-  // the careseeker. This — not just "ON_THE_WAY" status — is what proves
-  // the caretaker actually reached the customer, so it gates payment
-  // collection and Complete Service below.
   bool get _otpVerified {
     final v = _data["otp_verified"] ?? widget.order["otp_verified"] ?? 0;
     if (v is bool) return v;
@@ -91,13 +90,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       _rawDocUrls.split("|||").where((u) => u.trim().isNotEmpty).toList();
 
   // ── Emergency contact (careseeker's) ───────────────────────────
-  // ✅ only meaningful once the backend gate lets these fields through —
-  // which happens ONLY when status is ON_THE_WAY AND the arrival OTP has
-  // been verified. We still re-check both conditions client-side as a
-  // second layer, and — on top of that — we no longer print the details
-  // straight onto the page. See _emergencyContactPrompt /
-  // _showEmergencyContactSheet below: the actual name/number only render
-  // once the caretaker deliberately taps to reveal them.
   String get _emergencyName =>
       (_data["emergency_name"] ?? "").toString().trim();
   String get _emergencyRelationship =>
@@ -129,14 +121,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     } catch (_) { return null; }
   }
 
-  // Screenshot is restricted for the ENTIRE lifecycle of an active/closed
-  // booking — i.e. from the moment it's not yet accepted (still carries
-  // sensitive client data) all the way through completion. Only a freshly
-  // cancelled booking with nothing sensitive left to protect is exempt.
-  // In practice: block always, except when cancelled.
-  // NOTE: the protection itself is unchanged — only the visual "Secure"
-  // header indicator has been removed per request, so this still runs
-  // silently in the background.
   bool get _shouldBlockScreenshot => !_isCancelled;
 
   // ── Lifecycle ────────────────────────────────────────────────
@@ -173,12 +157,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   void _blockScreenshots() {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: SystemUiOverlay.values);
-    // FLAG_SECURE equivalent — prevents screenshots and screen recording
     SystemChannels.platform.invokeMethod('SystemChrome.setApplicationSwitcherDescription', {
       'label': 'Medico',
       'primaryColor': 0xFF0B8FAC,
     });
-    // Use secure flag via platform channel
     _setSecureFlag(true);
     if (mounted) setState(() => _screenshotBlocked = true);
   }
@@ -194,18 +176,13 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         'SystemChrome.setSystemUIOverlayStyle',
         <String, dynamic>{},
       );
-      // Primary approach: use platform-specific secure window flag
       const channel = MethodChannel('com.medico.app/security');
       await channel.invokeMethod('setSecureFlag', {'secure': secure});
-    } catch (_) {
-      // If custom channel not implemented, fall back gracefully
-      // The UI overlay below still visually blocks content when needed
-    }
+    } catch (_) {}
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Re-apply policy when app comes back to foreground
     if (state == AppLifecycleState.resumed) {
       _applyScreenshotPolicy();
     }
@@ -217,7 +194,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     _timer?.cancel();
     _locationTimer?.cancel();
     _docPulse.dispose();
-    _allowScreenshots(); // Always lift restriction on exit
+    _allowScreenshots();
     super.dispose();
   }
 
@@ -235,7 +212,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
           _loading = false;
           _error = null;
         });
-        // Re-apply screenshot policy whenever status changes
         _applyScreenshotPolicy();
       } else if (mounted) {
         setState(() { _loading = false; _error = d["message"]?.toString(); });
@@ -288,8 +264,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   }
 
   // ── Copy helper ────────────────────────────────────────────────
-  // Used by both the header title and the "Booking ID" row so users
-  // can quickly copy the order code to share with support, etc.
   Future<void> _copyOrderCode() async {
     if (_code.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: _code));
@@ -315,10 +289,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     }
   }
 
-  // Pushes the arrival-OTP screen. Called automatically once the journey
-  // starts, and also reachable again from the CTA button if the caretaker
-  // backs out before verifying (status stays ON_THE_WAY, otp_verified
-  // stays 0, so the CTA keeps offering "Verify Arrival OTP").
   Future<void> _openOtpScreen() async {
     final verified = await Navigator.push<bool>(
       context,
@@ -334,6 +304,31 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       _toast("Arrival OTP verified ✓ Service started");
     }
     _fetch();
+  }
+
+  // ── Health details navigation ──────────────────────────────────
+  // Reachable only once the caretaker has accepted the booking
+  // (_notAccepted == false), and permanently blocked the moment the
+  // order status hits COMPLETED — the careseeker's health profile
+  // must not stay reachable after the engagement ends. _healthDetailsCard()
+  // below enforces the same gate visually; this is the click-through guard.
+  Future<void> _openHealthDetails() async {
+    if (_notAccepted || _isCompleted) return;
+    final cid = _careseekerId;
+    if (cid == null) {
+      _toast("Careseeker not found for this booking", type: _ToastType.error);
+      return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CareseekerHealthDetailsViewScreen(
+          userId: cid is int ? cid : int.parse(cid.toString()),
+          orderId: _orderId is int ? _orderId : int.parse(_orderId.toString()),
+          caretakerId: _userId,
+        ),
+      ),
+    );
   }
 
   Future<void> _startLiveTracking() async {
@@ -789,14 +784,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                     ])),
                   const SizedBox(height: 12),
 
+                  // ── Health details access — accepted-only, locked post-completion ──
+                  _healthDetailsCard(),
+
                   // ── Emergency contact — reveal on demand ───────────
-                  // Only ever eligible once the caretaker has verified the
-                  // arrival OTP while ON_THE_WAY (see _showEmergencyContact).
-                  // Even then, we don't print the name/number straight onto
-                  // the page — we show a compact prompt and only pull the
-                  // actual contact details into view inside a sheet when the
-                  // caretaker deliberately taps for it, i.e. only when it's
-                  // genuinely required.
                   if (_showEmergencyContact) ...[
                     _emergencyContactPrompt(),
                     const SizedBox(height: 12),
@@ -1294,11 +1285,120 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     );
   }
 
+  // ── Health Details access card ──────────────────────────────────
+  // Gate: hidden entirely until accepted (_notAccepted). Once accepted,
+  // shows a tappable card leading to CareseekerHealthDetailsViewScreen.
+  // Once COMPLETED, permanently swaps to the same locked-box pattern used
+  // for client/location/docs — the profile stays reachable only for the
+  // life of the active booking.
+  Widget _healthDetailsCard() {
+    if (_notAccepted) return const SizedBox.shrink();
+
+    if (_isCompleted) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        margin: const EdgeInsets.only(bottom: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2))],
+        ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0B8FAC), Color(0xFF14B8A6)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.health_and_safety_rounded,
+                color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Health Details Restricted",
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: Colors.black87),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  "🔒  Careseeker's health profile is hidden once the service is completed.",
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ]),
+      );
+    }
+
+    return GestureDetector(
+      onTap: _openHealthDetails,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        margin: const EdgeInsets.only(bottom: 14),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.primary.withOpacity(0.30), width: 1.2),
+        ),
+        child: Row(children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: const Icon(Icons.health_and_safety_rounded,
+                color: AppColors.primary, size: 19),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text("View Careseeker Health Details",
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87)),
+              SizedBox(height: 2),
+              Text("Medical history, mobility, allergies & more",
+                  style: TextStyle(fontSize: 11, color: Colors.grey)),
+            ]),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(9),
+              boxShadow: [BoxShadow(
+                  color: AppColors.primary.withOpacity(0.30),
+                  blurRadius: 6,
+                  offset: const Offset(0, 3))],
+            ),
+            child: const Text("View",
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12)),
+          ),
+        ]),
+      ),
+    );
+  }
+
   // ── Booking details toggle ──────────────────────────────────────
-  // Compact tap target that expands/collapses the secondary booking
-  // fields (category, services, date, slot, location, payment method).
-  // Keeps the page scannable by default; the caretaker opts in to the
-  // full breakdown only when they actually want it.
   Widget _bookingDetailsToggle() => GestureDetector(
         onTap: () => setState(() => _detailsExpanded = !_detailsExpanded),
         child: AnimatedContainer(
@@ -1354,9 +1454,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
       );
 
   // ── Emergency Contact — compact prompt (tap to reveal) ────────
-  // Deliberately does NOT print the name/number on the page. It only
-  // signals that an emergency contact exists for this leg of the
-  // booking; the caretaker has to tap through to actually see it.
   Widget _emergencyContactPrompt() => GestureDetector(
         onTap: _showEmergencyContactSheet,
         child: Container(
@@ -1409,9 +1506,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         ),
       );
 
-  // Opens a bottom sheet with the actual emergency contact details.
-  // This is the one and only place those details render — nowhere
-  // else on the page shows the name/number directly.
   void _showEmergencyContactSheet() {
     showModalBottomSheet(
       context: context,
@@ -1454,10 +1548,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     );
   }
 
-  // ── Emergency Contact Card (rendered only inside the sheet) ────
-  // Red/amber themed so it visually reads as distinct from the teal
-  // client card — "this is not the client, this is who to call if
-  // something goes wrong". Renders one Call chip per number.
   Widget _emergencyContactCard() => Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -1727,7 +1817,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         ]),
       );
 
-  // ── Status Stepper (redesigned) ────────────────────────────────
+  // ── Status Stepper ────────────────────────────────────────────
   Widget _statusStepper() {
     final steps = <_StepInfo>[
       _StepInfo("Accepted",   Icons.handshake_rounded,      !_notAccepted),
