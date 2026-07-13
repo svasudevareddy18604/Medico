@@ -4,6 +4,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'dart:ui';
 import 'dart:convert';
 
 import 'login_page.dart';
@@ -14,6 +16,7 @@ import 'splash_screen.dart';
    🌗 THEME
 ================================ */
 ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
+ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('en'));
 final navigatorKey = GlobalKey<NavigatorState>(); // 🔥 ADD THIS LINE
 
 /* ===============================
@@ -46,6 +49,8 @@ Future<void> main() async {
   bool isDark = prefs.getBool("dark_mode") ?? false;
 
   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+  String languageCode = prefs.getString("language_code") ?? "en";
+localeNotifier.value = Locale(languageCode);
 
   runApp(const MyApp());
 }
@@ -172,19 +177,29 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder(
+    return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeNotifier,
       builder: (context, ThemeMode mode, _) {
-        return MaterialApp(
-          navigatorKey: navigatorKey,
-          debugShowCheckedModeBanner: false,
-          theme: lightTheme,
-          darkTheme: darkTheme,
-          themeMode: mode,
-          home: const SplashScreen(),
-          routes: {
-            '/login': (context) => const LoginPage(),
-            '/register': (context) => const RegisterPage(),
+        return ValueListenableBuilder<Locale>(
+          valueListenable: localeNotifier,
+          builder: (context, Locale locale, _) {
+            return MaterialApp(
+              navigatorKey: navigatorKey,
+              debugShowCheckedModeBanner: false,
+
+              locale: locale,
+
+              theme: lightTheme,
+              darkTheme: darkTheme,
+              themeMode: mode,
+
+              home: const SplashScreen(),
+
+              routes: {
+                '/login': (context) => const LoginPage(),
+                '/register': (context) => const RegisterPage(),
+              },
+            );
           },
         );
       },

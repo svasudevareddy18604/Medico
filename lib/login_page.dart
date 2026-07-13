@@ -4,8 +4,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'config/api.dart';
-import 'services/fcm_sync.dart'; // ← ADDED: shared FCM sync helper
+import 'services/fcm_sync.dart'; // ← shared FCM sync helper
 import 'screens/care_seeker/care_seeker_home.dart';
+import 'screens/care_seeker/careseeker_health_profile_screen.dart'; // ← NEW
 import 'screens/admin/admin_homepage.dart';
 import 'splash_screen.dart';
 import 'register_page.dart';
@@ -50,10 +51,7 @@ class _LoginPageState extends State<LoginPage> {
     try {
       setState(() => loading = true);
 
-      // ✅ FIX: Login immediately — no FCM wait before hitting backend.
-      // Previously getFcmToken() ran FIRST and awaited requestPermission()
-      // + a Firebase network round-trip (~1–3 s on cold start) before
-      // even sending the login request. Now we skip it entirely here.
+      // ✅ Login immediately — no FCM wait before hitting backend.
       final response = await http.post(
         Uri.parse("${Api.baseUrl}/login"),
         headers: {"Content-Type": "application/json"},
@@ -74,34 +72,44 @@ class _LoginPageState extends State<LoginPage> {
       final int    userId = data["id"];
       final String role   = data["role"];
 
+      // ── Health profile flags (care_seeker only, safe defaults for other roles)
+      final int healthProfileCompleted =
+          int.tryParse(data["health_profile_completed"]?.toString() ?? "0") ?? 0;
+      final int healthProfileSkipped =
+          int.tryParse(data["health_profile_skipped"]?.toString() ?? "0") ?? 0;
+
       // Save session
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt("user_id", userId);
       await prefs.setString("role", role);
       await prefs.setBool("is_logged_in", true);
+      await prefs.setBool("health_profile_completed", healthProfileCompleted == 1);
+      await prefs.setBool("health_profile_skipped", healthProfileSkipped == 1);
 
-      // ✅ FIX: FCM sync runs in background via shared helper — does NOT
-      // block navigation. Same function is also called from splash_screen.dart
-      // on every subsequent app open, so the token stays fresh even when
-      // this login screen never runs again for a returning user.
+      // ✅ FCM sync runs in background — does NOT block navigation.
       syncFcmToken(userId);
-
-      // Local notification / foreground-message setup (unrelated to token sync).
       setupFCMWithUser(userId);
 
       showToast("Welcome back! Login successful", type: ToastType.success);
       if (!mounted) return;
 
-      // Navigate by role
+      // ── Navigate by role ─────────────────────────────────────────────
       if (role == "admin") {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => AdminHomePage(userId: userId)),
         );
       } else if (role == "care_seeker") {
+        final bool needsHealthProfile =
+            healthProfileCompleted == 0 && healthProfileSkipped == 0;
+
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => CareSeekerHome(userId: userId)),
+          MaterialPageRoute(
+            builder: (_) => needsHealthProfile
+                ? CareSeekerHealthProfileScreen(userId: userId)
+                : CareSeekerHome(userId: userId),
+          ),
         );
       } else if (role == "care_taker") {
         Navigator.pushReplacement(

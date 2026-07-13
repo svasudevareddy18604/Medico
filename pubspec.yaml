@@ -10,9 +10,12 @@ dependencies:
   flutter:
     sdk: flutter
 
+  flutter_localizations:
+    sdk: flutter
+
   # UI
   cupertino_icons: ^1.0.8
-  intl: ^0.18.0
+  intl: ^0.20.2
   cached_network_image: ^3.3.1
 
   # QR + ML
@@ -36,18 +39,15 @@ dependencies:
   flutter_map: ^7.0.0
   latlong2: ^0.9.0
 
-  # Payment — Cashfree official Flutter SDK
-
   # Optional WebView
   webview_flutter: ^4.7.0
 
   # Image
   image_picker: ^1.1.2
+  image_cropper: ^11.0.0
 
   # Permissions
   permission_handler: ^11.3.1
-
-  image_cropper: ^11.0.0 
 
   screen_protector: ^1.4.2
 
@@ -55,7 +55,10 @@ dependencies:
   firebase_core: ^2.32.0
   firebase_messaging: ^14.9.4
   flutter_local_notifications: ^17.2.1
+
+  # Payment
   flutter_cashfree_pg_sdk: ^2.4.0+52
+
   url_launcher: ^6.3.2
 
 dev_dependencies:
@@ -71,7 +74,9 @@ flutter_launcher_icons:
   min_sdk_android: 21
 
 flutter:
+  generate: true
   uses-material-design: true
+
   assets:
     - assets/logo.png
     - assets/cashfree.png

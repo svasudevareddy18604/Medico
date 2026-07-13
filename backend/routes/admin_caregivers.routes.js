@@ -353,46 +353,6 @@ router.post("/approve/:id", async (req, res) => {
    `allow_reupload` (1 = caregiver can fix & re-upload docs,
                       0 = caregiver must contact admin, no re-upload)
 ───────────────────────────────────────────────────────────────────────────── */
-/* ─── EMAIL TEMPLATE HELPERS (add near top of file, after your requires) ── */
-const emailBase = (content) => `
-<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#f0f2f5;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif}
-.wrap{max-width:520px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.07)}
-.head{background:linear-gradient(135deg,#1B7F6E,#25A98F);padding:28px 32px;text-align:center}
-.head h1{color:#fff;font-size:17px;font-weight:600;margin:0}
-.head p{color:rgba(255,255,255,.72);font-size:11.5px;margin-top:5px}
-.body{padding:28px 32px}
-.note{font-size:13px;color:#4b5563;line-height:1.65;margin-bottom:6px}
-.card{background:#f8fffe;border:1px solid #d4f0ea;border-radius:10px;padding:18px 20px;margin:18px 0}
-.row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #e8f6f2;font-size:12.5px}
-.row:last-child{border-bottom:none}
-.row .l{color:#6b7280;font-weight:500}.row .v{color:#111827;font-weight:600}
-.footer{background:#f9fafb;padding:18px 32px;text-align:center;border-top:1px solid #eee}
-.footer p{color:#9ca3af;font-size:11px;margin:3px 0}
-.footer a{color:#1B7F6E;text-decoration:none;font-weight:600}
-</style></head><body><div class="wrap">${content}</div></body></html>`;
-
-const footer = `<div class="footer">
-  <p>Need help? <a href="mailto:support@medico.com">support@medico.com</a></p>
-  <p>© ${new Date().getFullYear()} Medico. All rights reserved.</p>
-</div>`;
-
-const rejectedEmail = ({ name, reason, allowReupload }) => emailBase(`
-  <div class="head"><h1>Account Update Required</h1><p>Action needed on your profile</p></div>
-  <div class="body">
-    <p class="note">Hi <strong>${name}</strong>, your caregiver account application was not approved at this time.</p>
-    <div class="card">
-      <div class="row"><span class="l">Reason</span><span class="v">${reason}</span></div>
-    </div>
-    <p class="note">${
-      allowReupload
-        ? "You may correct and re-upload your documents directly from the app."
-        : "This issue cannot be resolved by re-uploading documents. Please contact support for further assistance."
-    }</p>
-  </div>${footer}`);
-
-/* ─── ROUTE ─────────────────────────────────────────────── */
 router.post("/reject/:id", async (req, res) => {
   const { id } = req.params;
   const { reason, allow_reupload } = req.body;
@@ -414,19 +374,22 @@ router.post("/reject/:id", async (req, res) => {
       [reason, allowReupload, id]
     );
 
+    const reuploadNote = allowReupload
+      ? `<p>You may correct and <strong>re-upload your documents</strong> directly from the app.</p>`
+      : `<p>This issue cannot be resolved by re-uploading documents. Please <strong>contact admin support</strong> for further assistance.</p>`;
+
     await sendEmail(
       user[0].email,
-      "Account Update Required",
-      rejectedEmail({
-        name: user[0].first_name,
-        reason,
-        allowReupload,
-      })
+      "Account Rejected ❌",
+      `<h2>Account Rejected ❌</h2>
+       <p>Dear ${user[0].first_name}, your account was rejected.</p>
+       <p><strong>Reason:</strong> ${reason}</p>
+       ${reuploadNote}
+       <p><strong>Medico Team</strong></p>`
     );
-
     await sendPush(
       user[0].fcm_token,
-      "Account Update",
+      "Account Rejected ❌",
       allowReupload
         ? `Reason: ${reason}. You can re-upload your documents.`
         : `Reason: ${reason}. Contact admin support.`
@@ -443,6 +406,7 @@ router.post("/reject/:id", async (req, res) => {
     res.status(500).json({ success: false, message: "Rejection failed" });
   }
 });
+
 /* ─────────────────────────────────────────────────────────────────────────────
    BLOCK
 ───────────────────────────────────────────────────────────────────────────── */

@@ -15,6 +15,29 @@ import '../care_seeker/emergency_contact_screen.dart';
 import 'package:medico/config/api.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
+import '../../utils/localization/settings_strings.dart';
+
+// NOTE: Add `screen_protector: ^1.4.0` (or latest) to pubspec.yaml for the
+// Screen Security toggle to actually block screenshots/recording.
+// If you don't want the dependency yet, you can safely remove the
+// ScreenProtector calls in _toggleScreenSecurity() below — the rest of the
+// screen will still compile and the toggle will just persist a preference.
+import 'package:screen_protector/screen_protector.dart';
+
+/// Supported in-app languages. Extend this list as you add more locales.
+/// NOTE: This screen only stores the user's choice (SharedPreferences +
+/// `localeNotifier`). To make the whole app actually switch language you
+/// need a `ValueNotifier<Locale> localeNotifier` in main.dart (mirroring
+/// the existing `themeNotifier` pattern) and a `locale: localeNotifier.value`
+/// wired into your MaterialApp with `ValueListenableBuilder`, plus the
+/// corresponding .arb / localization delegates.
+const Map<String, String> kSupportedLanguages = {
+  "en": "English",
+  "te": "తెలుగు",
+  "hi": "हिन्दी",
+  "kn": "ಕನ್ನಡ",
+  "ta": "தமிழ்",
+};
 
 class SettingsScreen extends StatefulWidget {
   final int userId;
@@ -32,13 +55,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _dangerZoneExpanded = false;
   Map<String, dynamic>? _userData;
 
-  static const String _appVersion = "1.0.0"; // ✅ NEW: bump manually per release
+  String _languageCode = "en";
+  bool _screenSecurityEnabled = false;
+  bool _changingPassword = false;
+
+  static const String _appVersion = "1.0.0";
+  static const String _appBuild = "1";
 
   @override
   void initState() {
     super.initState();
     _isDarkMode = themeNotifier.value == ThemeMode.dark;
+    _loadPreferences();
     _loadProfile();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _languageCode = prefs.getString("app_language") ?? "en";
+      _screenSecurityEnabled = prefs.getBool("screen_security") ?? false;
+    });
+    // Re-apply screenshot protection on launch if it was previously enabled.
+    if (_screenSecurityEnabled) {
+      _applyScreenSecurity(true);
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -67,12 +109,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
   Future<void> _logout() async {
-  CaretakerStatusMonitor().stop(); // 🔥 ADD THIS LINE
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.clear();
-  if (!mounted) return;
-  Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
-}
+    CaretakerStatusMonitor().stop();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
+  }
 
   void _confirmLogout() => showDialog(
     context: context,
@@ -117,12 +159,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
 
       if (res.statusCode == 200) {
-  CaretakerStatusMonitor().stop(); // 🔥 ADD THIS LINE
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.clear();
-  if (!mounted) return;
-  Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
-} else {
+        CaretakerStatusMonitor().stop();
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        if (!mounted) return;
+        Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
+      } else {
         setState(() => _deletingAccount = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Failed to delete account. Please try again.")),
@@ -233,11 +275,281 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ── Language ──────────────────────────────────────────────────────────────
+
+  Future<void> _setLanguage(String code) async {
+    setState(() => _languageCode = code);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("app_language", code);
+
+    // If you've wired up a localeNotifier in main.dart (see the comment at
+    // the top of this file), uncomment the line below:
+    // localeNotifier.value = Locale(code);
+  }
+
+  void _showLanguageDialog() {
+    String tempSelection = _languageCode;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Select Language"),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: kSupportedLanguages.entries.map((entry) {
+                final code = entry.key;
+                final label = entry.value;
+                return RadioListTile<String>(
+                  contentPadding: EdgeInsets.zero,
+                  value: code,
+                  groupValue: tempSelection,
+                  activeColor: AppColors.secondary,
+                  title: Text(code == "en" ? "$label (Default)" : label),
+                  onChanged: (val) {
+                    if (val == null) return;
+                    setDialogState(() => tempSelection = val);
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text("Cancel", style: TextStyle(color: AppColors.muted)),
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: AppColors.gradient,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  foregroundColor: Colors.white,
+                  shadowColor: Colors.transparent,
+                  elevation: 0,
+                ),
+                onPressed: () {
+                  Navigator.pop(dialogContext);
+                  _setLanguage(tempSelection);
+                },
+                child: const Text("Save"),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Screen security (screenshot protection) ─────────────────────────────
+
+  Future<void> _applyScreenSecurity(bool enabled) async {
+    try {
+      if (enabled) {
+        await ScreenProtector.preventScreenshotOn();
+      } else {
+        await ScreenProtector.preventScreenshotOff();
+      }
+    } catch (e) {
+      debugPrint("SCREEN PROTECTOR ERROR: $e");
+    }
+  }
+
+  Future<void> _toggleScreenSecurity(bool val) async {
+    setState(() => _screenSecurityEnabled = val);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool("screen_security", val);
+    await _applyScreenSecurity(val);
+  }
+
+  // ── Change password ──────────────────────────────────────────────────────
+
+  void _showChangePasswordDialog() {
+    final currentPasswordController = TextEditingController();
+    final newPasswordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool obscureCurrent = true;
+    bool obscureNew = true;
+    bool obscureConfirm = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: !_changingPassword,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Change Password"),
+          content: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextFormField(
+                    controller: currentPasswordController,
+                    obscureText: obscureCurrent,
+                    enabled: !_changingPassword,
+                    decoration: InputDecoration(
+                      labelText: "Current Password",
+                      isDense: true,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      suffixIcon: IconButton(
+                        icon: Icon(obscureCurrent ? Icons.visibility_off : Icons.visibility, size: 18),
+                        onPressed: () => setDialogState(() => obscureCurrent = !obscureCurrent),
+                      ),
+                    ),
+                    validator: (v) => (v == null || v.isEmpty) ? "Required" : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: newPasswordController,
+                    obscureText: obscureNew,
+                    enabled: !_changingPassword,
+                    decoration: InputDecoration(
+                      labelText: "New Password",
+                      isDense: true,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      suffixIcon: IconButton(
+                        icon: Icon(obscureNew ? Icons.visibility_off : Icons.visibility, size: 18),
+                        onPressed: () => setDialogState(() => obscureNew = !obscureNew),
+                      ),
+                    ),
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return "Required";
+                      if (v.length < 6) return "Minimum 6 characters";
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: confirmPasswordController,
+                    obscureText: obscureConfirm,
+                    enabled: !_changingPassword,
+                    decoration: InputDecoration(
+                      labelText: "Confirm New Password",
+                      isDense: true,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      suffixIcon: IconButton(
+                        icon: Icon(obscureConfirm ? Icons.visibility_off : Icons.visibility, size: 18),
+                        onPressed: () => setDialogState(() => obscureConfirm = !obscureConfirm),
+                      ),
+                    ),
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return "Required";
+                      if (v != newPasswordController.text) return "Passwords do not match";
+                      return null;
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: _changingPassword ? null : () => Navigator.pop(dialogContext),
+              child: Text("Cancel", style: TextStyle(color: AppColors.muted)),
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: AppColors.gradient,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  foregroundColor: Colors.white,
+                  shadowColor: Colors.transparent,
+                  elevation: 0,
+                ),
+                onPressed: _changingPassword
+                    ? null
+                    : () async {
+                        if (!(formKey.currentState?.validate() ?? false)) return;
+                        setDialogState(() => _changingPassword = true);
+                        final success = await _changePassword(
+                          currentPasswordController.text,
+                          newPasswordController.text,
+                        );
+                        setDialogState(() => _changingPassword = false);
+                        if (success && dialogContext.mounted) {
+                          Navigator.pop(dialogContext);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Password updated successfully.")),
+                            );
+                          }
+                        }
+                      },
+                child: _changingPassword
+                    ? const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Text("Update"),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Calls the backend to change the password.
+  /// Adjust the endpoint/payload to match your actual API contract.
+  Future<bool> _changePassword(String currentPassword, String newPassword) async {
+    try {
+      final res = await http.post(
+        Uri.parse("${Api.baseUrl}/users/change-password/${widget.userId}"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "current_password": currentPassword,
+          "new_password": newPassword,
+        }),
+      );
+
+      if (res.statusCode == 200) return true;
+
+      String message = "Failed to update password. Please try again.";
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded["message"] != null) {
+          message = decoded["message"].toString();
+        }
+      } catch (_) {}
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      }
+      return false;
+    } catch (e) {
+      debugPrint("CHANGE PASSWORD ERROR: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Something went wrong. Check your connection.")),
+        );
+      }
+      return false;
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  String get _firstName => (_userData?["first_name"] ?? "Care").toString();
-  String get _lastName  => (_userData?["last_name"]  ?? "Seeker").toString();
-  String get _email     => (_userData?["email"]      ?? "").toString();
+ String get _firstName =>
+    (_userData?["first_name"] ?? SettingsStrings.care(_languageCode)).toString();
+
+String get _lastName =>
+    (_userData?["last_name"] ?? SettingsStrings.seeker(_languageCode)).toString();
+
+String get _email =>
+    (_userData?["email"] ?? "").toString();
 
   String get _profileImageUrl {
     final raw = (_userData?["profile_image"] ?? "").toString().trim();
@@ -245,6 +557,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (raw.startsWith("http")) return raw;
     return "${Api.imageBase}/$raw";
   }
+
+  String get _languageLabel => kSupportedLanguages[_languageCode] ?? "English";
 
   // ════════════════════════════════════════════════════════════════════════
   //  BUILD
@@ -263,40 +577,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             _profileCard(isDark),
             const SizedBox(height: 22),
-            _section("ACCOUNT", isDark, [
-              _tile(Icons.person_rounded, "My Profile",
+            _section(SettingsStrings.account(_languageCode), isDark, [
+              _tile(
+  Icons.person_rounded,
+  SettingsStrings.myProfile(_languageCode),
                   () => _go(ProfileScreen(userId: widget.userId)), isDark),
               Divider(height: 1, color: AppColors.border),
-              _tile(Icons.location_on_rounded, "Saved Addresses",
+              _tile(
+  Icons.location_on_rounded,
+  SettingsStrings.savedAddresses(_languageCode),
                   () => _go(CareSeekerLocation(userId: widget.userId)), isDark),
               Divider(height: 1, color: AppColors.border),
-              _tile(Icons.emergency_rounded, "Emergency Contact",
+              _tile(
+  Icons.emergency_rounded,
+  SettingsStrings.emergencyContact(_languageCode),
                   () => _go(EmergencyContactScreen(userId: widget.userId)), isDark),
             ]),
-            _section("PREFERENCES", isDark, [
-              _toggleTile(Icons.notifications_rounded, "Notifications",
-                  _notificationsEnabled,
+            _section(
+  SettingsStrings.preferences(_languageCode),
+  isDark,
+  [
+              _toggleTile(
+  Icons.notifications_rounded,
+  SettingsStrings.notifications(_languageCode),
+  _notificationsEnabled,
                   (v) => setState(() => _notificationsEnabled = v), isDark),
               Divider(height: 1, color: AppColors.border),
-              _toggleTile(
-                  _isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-                  "Dark Mode", _isDarkMode, _toggleDarkMode, isDark),
+            _toggleTile(
+  _isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+  SettingsStrings.darkMode(_languageCode),
+  _isDarkMode,
+  _toggleDarkMode,
+  isDark,
+),
+              Divider(height: 1, color: AppColors.border),
+              _tile(
+  Icons.language_rounded,
+  SettingsStrings.language(_languageCode),
+  _showLanguageDialog,
+  isDark,
+  trailingLabel: _languageLabel,
+),
             ]),
-            _section("SUPPORT", isDark, [
-              _tile(Icons.support_agent_rounded, "Live Chat Support",
+            _section(
+  SettingsStrings.security(_languageCode),
+  isDark,
+  [
+              _tile(
+  Icons.lock_reset_rounded,
+  SettingsStrings.changePassword(_languageCode),
+  _showChangePasswordDialog,
+  isDark,
+),
+              Divider(height: 1, color: AppColors.border),
+             _toggleTile(
+  Icons.security_rounded,
+  SettingsStrings.screenSecurity(_languageCode),
+                  _screenSecurityEnabled, _toggleScreenSecurity, isDark),
+            ]),
+          _section(SettingsStrings.support(_languageCode), isDark, [
+             _tile(
+  Icons.support_agent_rounded,
+  SettingsStrings.liveChatSupport(_languageCode),
                   () => _go(LiveChatScreen(userId: widget.userId)), isDark),
               Divider(height: 1, color: AppColors.border),
-              _tile(Icons.help_rounded, "Help Center",
+              _tile(
+  Icons.help_rounded,
+  SettingsStrings.helpCenter(_languageCode),
                   () => _go(const HelpCenterScreen()), isDark),
               Divider(height: 1, color: AppColors.border),
-              _tile(Icons.info_rounded, "About App",
+              _tile(
+  Icons.info_rounded,
+  SettingsStrings.aboutApp(_languageCode),
                   () => _go(const AboutAppScreen()), isDark),
             ]),
-            _section("LEGAL", isDark, [
-              _tile(Icons.privacy_tip_rounded, "Privacy Policy",
+            _section(SettingsStrings.legal(_languageCode), isDark, [
+              _tile(
+  Icons.privacy_tip_rounded,
+  SettingsStrings.privacyPolicy(_languageCode),
                   () => _go(const PrivacyScreen()), isDark),
               Divider(height: 1, color: AppColors.border),
-              _tile(Icons.description_rounded, "Terms & Conditions",
+              _tile(
+  Icons.description_rounded,
+  SettingsStrings.termsConditions(_languageCode),
                   () => _go(const TermsConditionsScreen()), isDark),
             ]),
             _logoutCard(isDark),
@@ -305,7 +668,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Expanded(child: Divider(color: isDark ? Colors.white12 : AppColors.border)),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Text("ADVANCED",
+               child: Text(
+  SettingsStrings.advanced(_languageCode),
                     style: TextStyle(
                       fontSize: 10,
                       letterSpacing: 1.6,
@@ -318,7 +682,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 14),
             _dangerZone(isDark),
             const SizedBox(height: 28),
-            _versionFooter(isDark), // ✅ NEW
+            _versionFooter(isDark),
           ],
         )),
       ]),
@@ -347,8 +711,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: const Icon(Icons.settings_rounded, color: Colors.white, size: 24),
       ),
       const SizedBox(width: 14),
-      const Text("Settings",
-          style: TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.bold)),
+      Text(
+  SettingsStrings.settings(_languageCode),
+  style: const TextStyle(
+    color: Colors.white,
+    fontSize: 30,
+    fontWeight: FontWeight.bold,
+  ),
+),
     ]),
   );
 
@@ -468,7 +838,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Nav tile ──────────────────────────────────────────────────────────────
 
-  Widget _tile(IconData icon, String title, VoidCallback onTap, bool isDark) => ListTile(
+  Widget _tile(IconData icon, String title, VoidCallback onTap, bool isDark,
+      {String? trailingLabel}) => ListTile(
     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
     leading: _iconBox(icon),
     title: Text(title,
@@ -476,8 +847,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fontWeight: FontWeight.w500, fontSize: 14,
           color: isDark ? Colors.white : Colors.black87,
         )),
-    trailing: Icon(Icons.arrow_forward_ios_rounded,
-        size: 14, color: isDark ? Colors.white38 : AppColors.muted),
+    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+      if (trailingLabel != null) ...[
+        Text(trailingLabel,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: isDark ? Colors.white38 : AppColors.muted,
+            )),
+        const SizedBox(width: 6),
+      ],
+      Icon(Icons.arrow_forward_ios_rounded,
+          size: 14, color: isDark ? Colors.white38 : AppColors.muted),
+    ]),
     onTap: onTap,
   );
 
@@ -531,9 +912,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         child: Icon(Icons.logout_rounded, color: AppColors.danger, size: 20),
       ),
-      title: Text("Logout",
-          style: TextStyle(
-              color: AppColors.danger, fontWeight: FontWeight.bold, fontSize: 14)),
+      title: Text(
+  SettingsStrings.logout(_languageCode),
+  style: const TextStyle(
+    color: AppColors.danger,
+    fontWeight: FontWeight.bold,
+    fontSize: 14,
+  ),
+),
       trailing: Icon(Icons.arrow_forward_ios_rounded,
           size: 14, color: AppColors.danger.withOpacity(0.5)),
       onTap: _confirmLogout,
@@ -558,13 +944,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 16),
             const SizedBox(width: 8),
             Expanded(
-              child: Text("DANGER ZONE",
-                  style: TextStyle(
-                    color: AppColors.danger,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    letterSpacing: 1.4,
-                  )),
+              child: Text(
+  SettingsStrings.dangerZone(_languageCode),
+  style: const TextStyle(
+    color: AppColors.danger,
+    fontWeight: FontWeight.bold,
+    fontSize: 11,
+    letterSpacing: 1.4,
+  ),
+),
             ),
             Text(_dangerZoneExpanded ? "Hide" : "Show",
                 style: TextStyle(
@@ -606,13 +994,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : Icon(Icons.delete_forever_rounded,
                             color: AppColors.danger, size: 20),
                   ),
-                  title: Text("Delete Account",
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                        color: AppColors.danger,
-                      )),
-                  subtitle: Text("Permanently remove your account and data",
+                  title: Text(
+  SettingsStrings.deleteAccount(_languageCode),
+  style: const TextStyle(
+    fontWeight: FontWeight.w600,
+    fontSize: 14,
+    color: AppColors.danger,
+  ),
+),
+                  subtitle: Text(
+  SettingsStrings.dangerZoneSubtitle(_languageCode),
+
                       style: TextStyle(
                           fontSize: 11,
                           color: isDark ? Colors.white38 : AppColors.muted)),
@@ -625,18 +1017,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
   );
 
   // ── Version footer ───────────────────────────────────────────────────────
-  // ✅ NEW: simple centered app version, useful for support/debugging.
 
   Widget _versionFooter(bool isDark) => Center(
-    child: Text(
-      "Medico  •  v$_appVersion",
-      style: TextStyle(
-        fontSize: 11.5,
-        letterSpacing: 0.4,
-        fontWeight: FontWeight.w500,
-        color: isDark ? Colors.white24 : AppColors.muted,
+    child: Column(children: [
+      Text(
+        "Medico",
+        style: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.4,
+          color: isDark ? Colors.white38 : AppColors.muted,
+        ),
       ),
-    ),
+      const SizedBox(height: 2),
+      Text(
+        "Version $_appVersion  •  Build $_appBuild",
+        style: TextStyle(
+          fontSize: 11,
+          letterSpacing: 0.3,
+          color: isDark ? Colors.white24 : AppColors.muted,
+        ),
+      ),
+    ]),
   );
 }
 

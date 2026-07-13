@@ -1,0 +1,17 @@
+{
+  "@@locale": "en",
+
+  "appName": "Medico",
+
+  "login": "Login",
+  "register": "Register",
+  "email": "Email",
+  "password": "Password",
+
+  "home": "Home",
+  "profile": "Profile",
+  "settings": "Settings",
+
+  "language": "Language",
+  "logout": "Logout"
+}

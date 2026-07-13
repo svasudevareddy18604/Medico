@@ -179,9 +179,11 @@ exports.login = async (req, res) => {
     // FIX 1: Lightweight base query — no JOIN, no subquery, only needed columns.
     // FIX 2: Ensure users.email has an index (run once in your DB if missing):
     //   ALTER TABLE users ADD INDEX idx_users_email (email);
+    // ✅ ADDED: health_profile_completed, health_profile_skipped
     const [rows] = await db.query(
       `SELECT id, first_name, last_name, email, role, password,
-              profile_completed, approval_status, is_blocked
+              profile_completed, health_profile_completed, health_profile_skipped,
+              approval_status, is_blocked
        FROM users
        WHERE email = ?
        LIMIT 1`,
@@ -230,7 +232,13 @@ exports.login = async (req, res) => {
       email:             user.email,
       first_name:        user.first_name,
       last_name:         user.last_name,
+
       profile_completed: user.profile_completed,
+
+      // ✅ ADDED: health profile flags — care_seeker onboarding gate
+      health_profile_completed: user.health_profile_completed,
+      health_profile_skipped:   user.health_profile_skipped,
+
       documents_uploaded,
       approval_status:   user.approval_status,
       caregiver_type,

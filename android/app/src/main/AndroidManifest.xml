@@ -35,6 +35,14 @@
             android:name="com.cashfree.pg.apiKey"
             android:value="TEST110658581289d0bb044671cf744285856011"/>
 
+        <!-- FCM NOTIFICATION ICON + COLOR (small status-bar icon) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_medico"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/medico_teal"/>
+
         <!-- FIREBASE MESSAGING -->
         <service
             android:name="com.google.firebase.messaging.FirebaseMessagingService"
