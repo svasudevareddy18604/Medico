@@ -85,6 +85,42 @@ const refundRejectedEmail = ({ name, email, amount, orderCode, reason }) =>
   });
 
 /* =====================================================
+   ✅ NEW — Order cancellation notification email (to careseeker)
+   Sent when admin cancels a booking, so the user isn't just
+   staring at a status change in the app with no explanation.
+===================================================== */
+
+const orderCancelledByAdminEmail = ({ name, email, orderCode, reason }) =>
+  sendMail({
+    to: email,
+    subject: `Your Booking ${orderCode} Has Been Cancelled`,
+    html: `
+  <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#f9f9f9;border-radius:12px;overflow:hidden">
+    <div style="background:#EF4444;padding:32px 28px;text-align:center">
+      <h1 style="color:#fff;margin:0;font-size:22px">Booking Cancelled</h1>
+    </div>
+    <div style="padding:28px">
+      <p style="color:#333;font-size:15px">Hi <strong>${name}</strong>,</p>
+      <p style="color:#555;font-size:14px;line-height:1.7">
+        Your booking <strong>${orderCode}</strong> has been cancelled by the
+        <strong>Medico team</strong>.
+      </p>
+      <div style="background:#fff0f0;border-left:4px solid #EF4444;border-radius:6px;padding:14px 16px;margin:20px 0">
+        <p style="margin:0;color:#c0392b;font-size:13.5px">
+          <strong>Reason:</strong> ${reason}
+        </p>
+      </div>
+      <p style="color:#555;font-size:13.5px;line-height:1.7">
+        If you paid online, please check the app for refund eligibility and status.
+        We apologise for the inconvenience.
+      </p>
+      <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+      <p style="color:#999;font-size:12px;text-align:center">Medico Healthcare Services</p>
+    </div>
+  </div>`,
+  });
+
+/* =====================================================
    GET /  — ALL ORDERS (admin)
 ===================================================== */
 
@@ -106,6 +142,7 @@ router.get("/", async (req, res) => {
         o.longitude,
         o.category,
         o.cancel_reason,
+        o.cancelled_by,
         o.refund_amount,
         o.refund_status,
         o.created_at,
@@ -123,14 +160,14 @@ router.get("/", async (req, res) => {
         c.last_name   AS caretaker_last_name,
         c.mobile      AS caretaker_mobile,
 
-        cancelled_by.first_name AS cancelled_caretaker_first_name,
-        cancelled_by.last_name  AS cancelled_caretaker_last_name,
-        cancelled_by.mobile     AS cancelled_caretaker_mobile
+        cancelled_by_ct.first_name AS cancelled_caretaker_first_name,
+        cancelled_by_ct.last_name  AS cancelled_caretaker_last_name,
+        cancelled_by_ct.mobile     AS cancelled_caretaker_mobile
 
       FROM orders o
-      LEFT JOIN users u            ON o.user_id               = u.id
-      LEFT JOIN users c            ON o.caretaker_id          = c.id
-      LEFT JOIN users cancelled_by ON o.assigned_caretaker_id = cancelled_by.id
+      LEFT JOIN users u               ON o.user_id               = u.id
+      LEFT JOIN users c               ON o.caretaker_id          = c.id
+      LEFT JOIN users cancelled_by_ct ON o.assigned_caretaker_id = cancelled_by_ct.id
 
       ORDER BY o.created_at DESC
     `);
@@ -234,12 +271,8 @@ router.get("/available-caretakers/:orderId", async (req, res) => {
 });
 
 /* =====================================================
-   ✅ NEW — GET /:id/otp
+   GET /:id/otp
    Admin-only view of the Service OTP for a single order.
-   Returns the OTP + verification state regardless of order
-   status/time, so admin can look it up at any point in the
-   order's lifecycle (e.g. to investigate a dispute later).
-
    Full path once mounted in server.js: GET /api/admin/orders/:id/otp
 ===================================================== */
 
@@ -344,6 +377,9 @@ router.post("/:id/assign", async (req, res) => {
 
 /* =====================================================
    PUT /:id/cancel  — CANCEL ORDER (admin)
+   ✅ UPDATED: now stamps cancelled_by = 'admin' so the
+   user-facing app can show "Cancelled by the Medico team"
+   instead of a generic message, and emails the careseeker.
 ===================================================== */
 
 router.put("/:id/cancel", async (req, res) => {
@@ -356,15 +392,39 @@ router.put("/:id/cancel", async (req, res) => {
       .json({ success: false, message: "Reason required" });
 
   try {
+    const [[order]] = await db.query(
+      `SELECT o.order_code, u.first_name, u.email
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.user_id
+       WHERE o.id = ?`,
+      [id]
+    );
+
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found" });
+
     await db.query(
       `UPDATE orders
        SET status        = 'CANCELLED',
            cancel_reason = ?,
+           cancelled_by  = 'admin',
            cancelled_at  = NOW()
        WHERE id = ?`,
       [reason, id]
     );
+
     res.json({ success: true, message: "Order cancelled" });
+
+    if (order.email) {
+      setImmediate(() =>
+        orderCancelledByAdminEmail({
+          name:      order.first_name || "there",
+          email:     order.email,
+          orderCode: order.order_code || `#${id}`,
+          reason,
+        })
+      );
+    }
   } catch (err) {
     console.error("PUT /:id/cancel:", err);
     res.status(500).json({ success: false, message: "Cancel failed" });

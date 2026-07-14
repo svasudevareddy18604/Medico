@@ -143,6 +143,8 @@ class Api {
   static String earnings(int caretakerId)        => "$baseUrl/earnings/$caretakerId";
   static String earningsHistory(int caretakerId) => "$baseUrl/earnings/history/$caretakerId";
   static const String withdraw                   = "$baseUrl/withdrawals";
+  static String earningsBreakdown(int caretakerId, String period) =>
+    "$baseUrl/caretaker/earnings/breakdown/$caretakerId?period=$period";
 
   /* ================= CARETAKERS ================= */
 
