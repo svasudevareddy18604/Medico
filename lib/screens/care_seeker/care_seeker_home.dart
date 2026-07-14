@@ -32,10 +32,8 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
   Timer? promoTimer;
   int _currentPromoPage = 0;
 
-  // ── Key so we can call _refresh() on CartScreen from outside ──────────────
   final GlobalKey<CartScreenState> _cartKey = GlobalKey<CartScreenState>();
 
-  // ── Screens built ONCE — never recreated ─────────────────────────────────
   late final List<Widget> _screens;
 
   @override
@@ -44,9 +42,8 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
     WidgetsBinding.instance.addObserver(this);
     themeNotifier.addListener(_onThemeChange);
 
-    // Build screens once here so IndexedStack never rebuilds them
     _screens = [
-      const _HomeBodyPlaceholder(), // replaced in build() with real home body
+      const _HomeBodyPlaceholder(),
       CartScreen(key: _cartKey, userId: widget.userId),
       OrdersScreen(userId: widget.userId),
       SettingsScreen(userId: widget.userId),
@@ -133,22 +130,17 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
     });
   }
 
-  // ── Tab switching ─────────────────────────────────────────────────────────
-
   void _onTabTap(int i) {
     setState(() => selectedIndex = i);
     switch (i) {
       case 0: _loadLocation(); break;
       case 1:
-        // Always refresh cart when user taps cart tab
         _cartKey.currentState?.refresh();
         _loadCartCount();
         break;
       default: break;
     }
   }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
 
   String getGreeting() {
     final h = DateTime.now().hour;
@@ -202,8 +194,11 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
           onTap: () async {
             await Navigator.push(context,
                 MaterialPageRoute(builder: (_) => CareSeekerLocation(userId: widget.userId)));
+            // ✅ This already re-fetches the active address from the server
+            // every time you return from the address screen — so once
+            // deleteAddress() clears the stale selection, this call is what
+            // makes Home show "Add Address" within seconds of coming back.
             await _loadLocation();
-            // Also refresh cart's address
             _cartKey.currentState?.refresh();
           },
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -238,14 +233,11 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
     ]),
   );
 
-  // ── Professional promo banner (PhonePe / Swiggy style) ─────────────────────
-
-  // A rotating set of professional gradient themes so cards don't look identical.
   static const List<List<Color>> _promoGradients = [
-    [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)], // deep slate teal
-    [Color(0xFF1A2980), Color(0xFF26D0CE)],                     // indigo → teal
-    [Color(0xFF134E5E), Color(0xFF71B280)],                     // emerald slate
-    [Color(0xFF232526), Color(0xFF414345)],                     // graphite
+    [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)],
+    [Color(0xFF1A2980), Color(0xFF26D0CE)],
+    [Color(0xFF134E5E), Color(0xFF71B280)],
+    [Color(0xFF232526), Color(0xFF414345)],
   ];
 
   Widget _buildPromoCarousel() {
@@ -300,7 +292,6 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        // Base gradient
                         Container(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
@@ -310,7 +301,6 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
                             ),
                           ),
                         ),
-                        // Decorative diagonal accent shape (subtle, professional)
                         Positioned(
                           right: -30,
                           top: -30,
@@ -335,7 +325,6 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
                             ),
                           ),
                         ),
-                        // Optional promo image, right-aligned, masked
                         if (promoImageUrl != null)
                           Positioned(
                             right: 0,
@@ -355,7 +344,6 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
                                   errorBuilder: (_, __, ___) => const SizedBox()),
                             ),
                           ),
-                        // Content
                         Padding(
                           padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
                           child: Column(
@@ -424,7 +412,6 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
           ),
         ),
         const SizedBox(height: 10),
-        // Dot indicators
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: List.generate(promotions.length, (i) {
@@ -576,18 +563,15 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
             color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8))),
       ]);
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     final bgColor = isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
 
-    // Home body is stateful (theme/location), rebuild it each time, rest are stable
     final bodies = [
       _buildHomeBody(),
-      _screens[1], // CartScreen — stable instance with key
-      _screens[2], // OrdersScreen
-      _screens[3], // SettingsScreen
+      _screens[1],
+      _screens[2],
+      _screens[3],
     ];
 
     return Scaffold(
@@ -680,7 +664,6 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
   }
 }
 
-// Placeholder so _screens list can be initialized before home body is built
 class _HomeBodyPlaceholder extends StatelessWidget {
   const _HomeBodyPlaceholder();
   @override Widget build(BuildContext context) => const SizedBox.shrink();

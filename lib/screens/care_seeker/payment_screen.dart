@@ -6,15 +6,190 @@ import 'package:flutter_cashfree_pg_sdk/api/cfpayment/cfwebcheckoutpayment.dart'
 import 'package:flutter_cashfree_pg_sdk/api/cfpaymentgateway/cfpaymentgatewayservice.dart';
 import 'package:flutter_cashfree_pg_sdk/api/cferrorresponse/cferrorresponse.dart';
 import 'package:flutter_cashfree_pg_sdk/utils/cfenums.dart';
+import 'package:intl/intl.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'package:medico/main.dart';
 import '../../config/api.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'processing_screen.dart';
 import 'payment_failed_screen.dart';
-import 'package:intl/intl.dart';
+// Imported with a prefix because careseeker_location.dart declares its own
+// top-level `enum ToastType`, which would otherwise collide with the one
+// defined below in this file.
+import 'careseeker_location.dart' as location_screen;
 
 void _log(String msg) => debugPrint("💳 [Payment] $msg");
 
+// ════════════════════════════════════════════════════════════════════════
+//  TOP TOAST — a small, dependency-free replacement for SnackBar that
+//  slides down from the top of the screen. Stacks cleanly, auto-dismisses,
+//  and never fights with the bottom bar / keyboard the way SnackBars do.
+// ════════════════════════════════════════════════════════════════════════
+enum ToastType { success, error, info }
+
+class TopToast {
+  static OverlayEntry? _entry;
+
+  static void show(
+    BuildContext context, {
+    required String message,
+    ToastType type = ToastType.error,
+    Duration duration = const Duration(milliseconds: 2600),
+  }) {
+    final overlayState = Overlay.of(context, rootOverlay: true);
+
+    // Remove any toast currently showing so they don't stack.
+    _entry?.remove();
+    _entry = null;
+
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => _TopToastWidget(
+        message: message,
+        type: type,
+        duration: duration,
+        onFinished: () {
+          entry.remove();
+          if (_entry == entry) _entry = null;
+        },
+      ),
+    );
+
+    _entry = entry;
+    overlayState.insert(entry);
+  }
+}
+
+class _TopToastWidget extends StatefulWidget {
+  final String message;
+  final ToastType type;
+  final Duration duration;
+  final VoidCallback onFinished;
+
+  const _TopToastWidget({
+    required this.message,
+    required this.type,
+    required this.duration,
+    required this.onFinished,
+  });
+
+  @override
+  State<_TopToastWidget> createState() => _TopToastWidgetState();
+}
+
+class _TopToastWidgetState extends State<_TopToastWidget>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<Offset> _slide;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _slide = Tween<Offset>(begin: const Offset(0, -1.2), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+    _fade = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+
+    _controller.forward();
+    Future.delayed(widget.duration, () async {
+      if (!mounted) return;
+      await _controller.reverse();
+      widget.onFinished();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  ({IconData icon, Color color}) get _style {
+    switch (widget.type) {
+      case ToastType.success:
+        return (icon: Icons.check_circle_rounded, color: const Color(0xFF16A34A));
+      case ToastType.error:
+        return (icon: Icons.error_rounded, color: const Color(0xFFDC2626));
+      case ToastType.info:
+        return (icon: Icons.info_rounded, color: const Color(0xFF2563EB));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _style;
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        bottom: false,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: SlideTransition(
+            position: _slide,
+            child: FadeTransition(
+              opacity: _fade,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  constraints: const BoxConstraints(minHeight: 48),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.28),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        color: s.color.withOpacity(0.16),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(s.icon, color: s.color, size: 15),
+                    ),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        widget.message,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  PAYMENT SCREEN
+// ════════════════════════════════════════════════════════════════════════
 class PaymentScreen extends StatefulWidget {
   final int userId;
   final String date, slot, location;
@@ -49,6 +224,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String? _method;
   bool _processing = false;
 
+  // ── Service address is now mutable state, seeded from the widget, so it
+  // can be updated in place after the user picks a new one on the map/
+  // address screen — no need to pop this whole screen and rebuild it.
+  late String _location;
+  double? _latitude;
+  double? _longitude;
+  bool _locationUpdating = false;
+
+  // ── collapsible section states — hidden by default, user can expand ──────
+  bool _locationExpanded = false;
+  bool _scheduleExpanded = false;
+
   // ── FIX 1: Single persistent HTTP client — reuses TCP+TLS connections
   // instead of doing a full handshake on every tap. Saves 300–600ms.
   final http.Client _httpClient = http.Client();
@@ -71,6 +258,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
   void initState() {
     super.initState();
     themeNotifier.addListener(_onThemeChange);
+
+    _location = widget.location;
+    _latitude = widget.latitude;
+    _longitude = widget.longitude;
 
     // ── FIX 2 (core): Warm up the SDK immediately on screen open.
     // setCallback here means the WebView is ready before user taps Pay.
@@ -152,72 +343,73 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   // ── PLACE ORDER ───────────────────────────────────────────────────────────
   Future<Map<String, dynamic>?> _placeOrder({
-  required String method,
-  String paymentId = "",
-}) async {
-  _log("placeOrder → method:$method paymentId:$paymentId");
-  try {
-    final body = jsonEncode({
-      "user_id": widget.userId,
-      "location": widget.location,
-      "date": widget.date,
-      "slot": _to24Hour(widget.slot),
-      "total": widget.total,
-      "subtotal": widget.subtotal,
-      "service_charge": widget.serviceCharge,
-      "discount": widget.discount,
-      "coupon_code": widget.couponCode,
-      "payment_method": method,
-      "payment_id": paymentId,
-      "latitude": widget.latitude,
-      "longitude": widget.longitude,
-      "items": widget.cartItems
-          .map((e) => {
-                "service_id": e["service_id"] ?? e["id"],
-                "quantity": e["quantity"] ?? 1,
-                "price": e["price"] ?? 0,
-                "category": (e["category"] ?? "").toString().trim(),
-              })
-          .toList(),
-    });
+    required String method,
+    String paymentId = "",
+  }) async {
+    _log("placeOrder → method:$method paymentId:$paymentId");
+    try {
+      final body = jsonEncode({
+        "user_id": widget.userId,
+        "location": _location,
+        "date": widget.date,
+        "slot": _to24Hour(widget.slot),
+        "total": widget.total,
+        "subtotal": widget.subtotal,
+        "service_charge": widget.serviceCharge,
+        "discount": widget.discount,
+        "coupon_code": widget.couponCode,
+        "payment_method": method,
+        "payment_id": paymentId,
+        "latitude": _latitude,
+        "longitude": _longitude,
+        "items": widget.cartItems
+            .map((e) => {
+                  "service_id": e["service_id"] ?? e["id"],
+                  "quantity": e["quantity"] ?? 1,
+                  "price": e["price"] ?? 0,
+                  "category": (e["category"] ?? "").toString().trim(),
+                })
+            .toList(),
+      });
 
-    // ── FIX 1 (used here): reuse persistent _httpClient
-    final res = await _httpClient
-        .post(
-          Uri.parse(Api.placeOrder),
-          headers: {"Content-Type": "application/json"},
-          body: body,
-        )
-        .timeout(const Duration(seconds: 15));
+      // ── FIX 1 (used here): reuse persistent _httpClient
+      final res = await _httpClient
+          .post(
+            Uri.parse(Api.placeOrder),
+            headers: {"Content-Type": "application/json"},
+            body: body,
+          )
+          .timeout(const Duration(seconds: 15));
 
-    _log("placeOrder ${res.statusCode}: ${res.body}");
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (data["success"] != true) return null;
+      _log("placeOrder ${res.statusCode}: ${res.body}");
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (data["success"] != true) return null;
 
-    if (data["orders"] is List && (data["orders"] as List).isNotEmpty) {
-      final first = (data["orders"] as List).first as Map<String, dynamic>;
-      data["order_id"]   ??= first["order_id"] ?? first["id"];
-      data["order_code"] ??= first["order_code"];
+      if (data["orders"] is List && (data["orders"] as List).isNotEmpty) {
+        final first = (data["orders"] as List).first as Map<String, dynamic>;
+        data["order_id"] ??= first["order_id"] ?? first["id"];
+        data["order_code"] ??= first["order_code"];
+      }
+      _log("placeOrder success — order_id:${data["order_id"]}");
+      return data;
+    } catch (e) {
+      _log("placeOrder exception: $e");
+      return null;
     }
-    _log("placeOrder success — order_id:${data["order_id"]}");
-    return data;
-  } catch (e) {
-    _log("placeOrder exception: $e");
-    return null;
   }
-}
 
-// ── CLEAR CART ────────────────────────────────────────────────────────────
-Future<void> _clearCart() async {
-  try {
-    await _httpClient
-        .delete(Uri.parse("${Api.baseUrl}/cart/${widget.userId}/clear"))
-        .timeout(const Duration(seconds: 10));
-    _log("Cart cleared");
-  } catch (e) {
-    _log("clearCart error: $e");
+  // ── CLEAR CART ────────────────────────────────────────────────────────────
+  Future<void> _clearCart() async {
+    try {
+      await _httpClient
+          .delete(Uri.parse("${Api.baseUrl}/cart/${widget.userId}/clear"))
+          .timeout(const Duration(seconds: 10));
+      _log("Cart cleared");
+    } catch (e) {
+      _log("clearCart error: $e");
+    }
   }
-}
+
   // ── COD ───────────────────────────────────────────────────────────────────
   Future<void> _handleCOD() async {
     if (_processing) return;
@@ -289,14 +481,14 @@ Future<void> _clearCart() async {
       _log("createOrder HTTP ${res.statusCode}: ${res.body}");
 
       if (res.statusCode != 200) {
-        _snack("Server error (${res.statusCode}). Please try again.");
+        _toast("Server error (${res.statusCode}). Please try again.");
         if (mounted) setState(() => _processing = false);
         return;
       }
 
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data["success"] != true) {
-        _snack(data["message"] ?? "Payment initialization failed.");
+        _toast(data["message"] ?? "Payment initialization failed.");
         if (mounted) setState(() => _processing = false);
         return;
       }
@@ -305,13 +497,13 @@ Future<void> _clearCart() async {
       final String? cfOrderId = data["order_id"] as String?;
 
       if (sessionId == null || sessionId.isEmpty) {
-        _snack("Payment session unavailable. Please try again.");
+        _toast("Payment session unavailable. Please try again.");
         if (mounted) setState(() => _processing = false);
         return;
       }
 
       if (cfOrderId == null || cfOrderId.isEmpty) {
-        _snack("Order ID missing. Please try again.");
+        _toast("Order ID missing. Please try again.");
         if (mounted) setState(() => _processing = false);
         return;
       }
@@ -323,12 +515,12 @@ Future<void> _clearCart() async {
       // No re-registration needed — setCallback is idempotent and safe.
 
       final cfSession = CFSessionBuilder()
-    .setEnvironment(
-      Api.isProduction ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX,
-    )
-    .setOrderId(cfOrderId)
-    .setPaymentSessionId(sessionId)
-    .build();
+          .setEnvironment(
+            Api.isProduction ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX,
+          )
+          .setOrderId(cfOrderId)
+          .setPaymentSessionId(sessionId)
+          .build();
 
       final cfPayment = CFWebCheckoutPaymentBuilder()
           .setSession(cfSession)
@@ -340,21 +532,62 @@ Future<void> _clearCart() async {
       _cfService.doPayment(cfPayment);
     } catch (e) {
       _log("_startCashfree exception: $e");
-      _snack("Failed to open payment. Please try again.");
+      _toast("Failed to open payment. Please try again.");
       if (mounted) setState(() => _processing = false);
     }
   }
 
+  // ── CHANGE SERVICE ADDRESS ─────────────────────────────────────────────
+  // Opens the real careseeker_location.dart screen. That screen takes only
+  // a userId — no address is passed in, and nothing is returned via
+  // Navigator.pop. Instead, when the user taps an address there it writes
+  // the selection straight into SharedPreferences (keys below) and then
+  // pops. So once we're back, we just read those keys and, if the address
+  // actually changed, update this screen's summary in place.
+  Future<void> _changeLocation() async {
+    if (_locationUpdating) return;
+    setState(() => _locationUpdating = true);
+
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => location_screen.CareSeekerLocation(userId: widget.userId),
+        ),
+      );
+
+      if (!mounted) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final newAddress = prefs.getString("user_location_${widget.userId}");
+      final newLat = prefs.getDouble("user_lat_${widget.userId}");
+      final newLng = prefs.getDouble("user_lng_${widget.userId}");
+
+      if (newAddress != null &&
+          newAddress.trim().isNotEmpty &&
+          newAddress.trim() != _location) {
+        setState(() {
+          _location = newAddress.trim();
+          _latitude = newLat ?? _latitude;
+          _longitude = newLng ?? _longitude;
+          _locationExpanded = true; // reveal the updated address right away
+        });
+        _toast("Delivery address updated", type: ToastType.success);
+      }
+    } finally {
+      if (mounted) setState(() => _locationUpdating = false);
+    }
+  }
+
   // ── HELPERS ───────────────────────────────────────────────────────────────
-  void _snack(String msg) {
+  void _toast(String msg, {ToastType type = ToastType.error}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
+    TopToast.show(context, message: msg, type: type);
   }
 
   void _onConfirm() {
     if (_method == null) {
-      _snack("Please select a payment method");
+      _toast("Please select a payment method");
       return;
     }
     _method == "COD" ? _handleCOD() : _startCashfree();
@@ -372,11 +605,11 @@ Future<void> _clearCart() async {
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
               child: Column(children: [
                 _locationCard(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 _scheduleCard(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 _summaryCard(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 _paymentCard(),
                 const SizedBox(height: 100),
               ]),
@@ -431,9 +664,10 @@ Future<void> _clearCart() async {
         ),
       );
 
-  Widget _card({required Widget child}) => Container(
+  Widget _card({required Widget child, EdgeInsetsGeometry? padding}) =>
+      Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(18),
+        padding: padding ?? const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E293B) : Colors.white,
           borderRadius: BorderRadius.circular(20),
@@ -448,85 +682,210 @@ Future<void> _clearCart() async {
         child: child,
       );
 
-  Widget _sectionTitle(String title, IconData icon) =>
+  Widget _sectionTitle(String title, IconData icon, {double fontSize = 15}) =>
       Row(children: [
         Icon(icon, size: 18, color: AppColors.primary),
         const SizedBox(width: 8),
         Text(title,
             style: TextStyle(
-                fontSize: 15,
+                fontSize: fontSize,
                 fontWeight: FontWeight.bold,
                 color: isDark ? Colors.white : Colors.black87)),
       ]);
 
-  Widget _locationCard() => _card(
-        child: Row(children: [
-          Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.1),
-                  shape: BoxShape.circle),
-              child: Icon(Icons.location_on_rounded,
-                  color: AppColors.primary, size: 22)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("Service Location",
+  // ── COLLAPSIBLE SECTION HEADER — used for Location + Schedule ────────────
+  // Hidden by default. Tapping the row toggles a smooth expand/collapse.
+  // An optional trailingAction (e.g. "Change") sits as its own tap target
+  // so it doesn't also trigger expand/collapse.
+  Widget _collapsibleHeader({
+    required IconData icon,
+    required String title,
+    required String collapsedSubtitle,
+    required bool expanded,
+    required VoidCallback onTap,
+    Widget? trailingAction,
+  }) =>
+      Row(children: [
+        Expanded(
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(14),
+            child: Row(children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.1),
+                    shape: BoxShape.circle),
+                child: Icon(icon, color: AppColors.primary, size: 19),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : Colors.black87)),
+                    if (!expanded) ...[
+                      const SizedBox(height: 2),
+                      Text(collapsedSubtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: isDark
+                                  ? Colors.grey.shade400
+                                  : Colors.grey.shade500)),
+                    ],
+                  ],
+                ),
+              ),
+            ]),
+          ),
+        ),
+        if (trailingAction != null) ...[
+          const SizedBox(width: 4),
+          trailingAction,
+        ],
+        InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: AnimatedRotation(
+              turns: expanded ? 0.5 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: Icon(Icons.keyboard_arrow_down_rounded,
+                  color: isDark ? Colors.grey.shade400 : Colors.grey.shade500,
+                  size: 22),
+            ),
+          ),
+        ),
+      ]);
+
+  // ── "Change" pill button — opens careseeker_location.dart ────────────────
+  Widget _changeAddressButton() => InkWell(
+        onTap: _changeLocation,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(isDark ? 0.18 : 0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: _locationUpdating
+              ? SizedBox(
+                  width: 13,
+                  height: 13,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.primary),
+                )
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.edit_location_alt_rounded,
+                      size: 13, color: AppColors.primary),
+                  const SizedBox(width: 4),
+                  Text("Change",
                       style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.5,
-                          color: isDark
-                              ? Colors.grey.shade400
-                              : Colors.grey)),
-                  const SizedBox(height: 3),
-                  Text(widget.location,
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? Colors.white : Colors.black87)),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary)),
                 ]),
+        ),
+      );
+
+  Widget _locationCard() => _card(
+        padding: const EdgeInsets.all(14),
+        child: Column(children: [
+          _collapsibleHeader(
+            icon: Icons.location_on_rounded,
+            title: "Service Location",
+            collapsedSubtitle: _location,
+            expanded: _locationExpanded,
+            onTap: () =>
+                setState(() => _locationExpanded = !_locationExpanded),
+            trailingAction: _changeAddressButton(),
+          ),
+          AnimatedCrossFade(
+            duration: const Duration(milliseconds: 220),
+            crossFadeState: _locationExpanded
+                ? CrossFadeState.showFirst
+                : CrossFadeState.showSecond,
+            firstChild: Padding(
+              padding: const EdgeInsets.only(top: 12, left: 52),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(_location,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                        color: isDark ? Colors.white : Colors.black87)),
+              ),
+            ),
+            secondChild: const SizedBox(width: double.infinity, height: 0),
           ),
         ]),
       );
 
   Widget _scheduleCard() => _card(
-        child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _sectionTitle("Service Schedule", Icons.schedule_rounded),
-              const SizedBox(height: 14),
-              Row(children: [
-                Icon(Icons.calendar_today, size: 16, color: AppColors.primary),
-                const SizedBox(width: 8),
-                Text(widget.date,
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white : Colors.black87)),
-              ]),
-              const SizedBox(height: 10),
-              Row(children: [
-                Icon(Icons.access_time, size: 16, color: AppColors.primary),
-                const SizedBox(width: 8),
-                Text(widget.slot,
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary)),
-              ]),
-              const SizedBox(height: 12),
-              Text(
-                  "All selected services will be provided at this time slot",
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: isDark
-                          ? Colors.grey.shade400
-                          : Colors.grey)),
-            ]),
+        padding: const EdgeInsets.all(14),
+        child: Column(children: [
+          _collapsibleHeader(
+            icon: Icons.schedule_rounded,
+            title: "Service Schedule",
+            collapsedSubtitle: "${widget.date} • ${widget.slot}",
+            expanded: _scheduleExpanded,
+            onTap: () =>
+                setState(() => _scheduleExpanded = !_scheduleExpanded),
+          ),
+          AnimatedCrossFade(
+            duration: const Duration(milliseconds: 220),
+            crossFadeState: _scheduleExpanded
+                ? CrossFadeState.showFirst
+                : CrossFadeState.showSecond,
+            firstChild: Padding(
+              padding: const EdgeInsets.only(top: 14, left: 52),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(Icons.calendar_today,
+                        size: 15, color: AppColors.primary),
+                    const SizedBox(width: 8),
+                    Text(widget.date,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white : Colors.black87)),
+                  ]),
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    Icon(Icons.access_time,
+                        size: 15, color: AppColors.primary),
+                    const SizedBox(width: 8),
+                    Text(widget.slot,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primary)),
+                  ]),
+                  const SizedBox(height: 10),
+                  Text(
+                      "All selected services will be provided at this time slot",
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: isDark
+                              ? Colors.grey.shade400
+                              : Colors.grey.shade500)),
+                ],
+              ),
+            ),
+            secondChild: const SizedBox(width: double.infinity, height: 0),
+          ),
+        ]),
       );
 
   Widget _summaryCard() {
@@ -640,48 +999,40 @@ Future<void> _clearCart() async {
                         : (isDark ? Colors.white : Colors.black87)))),
       ]);
 
+  // ── PAYMENT METHOD — compact, professional segmented-style selector ──────
   Widget _paymentCard() => _card(
         child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _sectionTitle("Payment Method", Icons.payment_rounded),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               if (_method == null)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.only(top: 4, bottom: 12),
                   child: Text("Select how you'd like to pay",
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11.5,
                           color: isDark
                               ? Colors.grey.shade500
                               : Colors.grey.shade400)),
-                ),
-              const SizedBox(height: 8),
+                )
+              else
+                const SizedBox(height: 14),
               _payOption(
                 value: "COD",
-                leading: Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFE8F5E9),
-                        borderRadius: BorderRadius.circular(12)),
-                    child: const Icon(Icons.money_rounded,
-                        color: Color(0xFF2E7D32), size: 22)),
+                iconBg: const Color(0xFFE8F5E9),
+                iconColor: const Color(0xFF2E7D32),
+                icon: Icons.money_rounded,
                 title: "Cash after Service",
                 subtitle: "Pay in cash when done",
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               _payOption(
                 value: "ONLINE",
-                leading: Container(
-                    width: 42,
-                    height: 42,
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFE3F2FD),
-                        borderRadius: BorderRadius.circular(12)),
-                    child: Image.asset('assets/cashfree.png',
-                        fit: BoxFit.contain)),
+                iconBg: const Color(0xFFE3F2FD),
+                iconColor: const Color(0xFF1565C0),
+                icon: null,
+                assetIcon: 'assets/cashfree.png',
                 title: "Cards / UPI / Wallets",
                 subtitle: "Secure payment via Cashfree",
               ),
@@ -690,75 +1041,93 @@ Future<void> _clearCart() async {
 
   Widget _payOption({
     required String value,
-    required Widget leading,
+    required Color iconBg,
+    required Color iconColor,
     required String title,
     required String subtitle,
+    IconData? icon,
+    String? assetIcon,
   }) {
     final sel = _method == value;
-    return GestureDetector(
+    return InkWell(
       onTap: () => setState(() => _method = value),
+      borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: sel
-              ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.05)
+              ? AppColors.primary.withOpacity(isDark ? 0.14 : 0.06)
               : (isDark ? const Color(0xFF0F172A) : Colors.white),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
               color: sel
                   ? AppColors.primary
                   : (isDark
                       ? Colors.grey.shade700
                       : Colors.grey.shade200),
-              width: sel ? 1.5 : 1),
+              width: sel ? 1.3 : 1),
         ),
         child: Row(children: [
-          leading,
-          const SizedBox(width: 12),
+          Container(
+            width: 34,
+            height: 34,
+            padding: assetIcon != null ? const EdgeInsets.all(5) : null,
+            decoration: BoxDecoration(
+                color: iconBg, borderRadius: BorderRadius.circular(9)),
+            child: assetIcon != null
+                ? Image.asset(assetIcon, fit: BoxFit.contain)
+                : Icon(icon, color: iconColor, size: 18),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(title,
                       style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
                           color: sel
                               ? AppColors.primary
                               : (isDark ? Colors.white : Colors.black87))),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 1),
                   Text(subtitle,
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11,
                           color: isDark
                               ? Colors.grey.shade400
                               : Colors.grey.shade500)),
                 ]),
           ),
-          Container(
-              width: 22,
-              height: 22,
-              decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: sel ? AppColors.primary : Colors.transparent,
-                  border: Border.all(
-                      color: sel
-                          ? AppColors.primary
-                          : (isDark
-                              ? Colors.grey.shade600
-                              : Colors.grey.shade300),
-                      width: 2)),
-              child: sel
-                  ? const Icon(Icons.check, color: Colors.white, size: 13)
-                  : null),
+          const SizedBox(width: 6),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 18,
+            height: 18,
+            decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: sel ? AppColors.primary : Colors.transparent,
+                border: Border.all(
+                    color: sel
+                        ? AppColors.primary
+                        : (isDark
+                            ? Colors.grey.shade600
+                            : Colors.grey.shade300),
+                    width: 1.6)),
+            child: sel
+                ? const Icon(Icons.check, color: Colors.white, size: 11)
+                : null,
+          ),
         ]),
       ),
     );
   }
 
   Widget _bottomBar() => Container(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 26),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E293B) : Colors.white,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -780,29 +1149,29 @@ Future<void> _clearCart() async {
                 if (widget.discount > 0 || widget.serviceCharge > 0)
                   Text("₹${widget.subtotal.toStringAsFixed(0)}",
                       style: const TextStyle(
-                          fontSize: 13,
+                          fontSize: 12,
                           color: Colors.grey,
                           decoration: TextDecoration.lineThrough,
                           decorationColor: Colors.grey)),
                 Text("₹${widget.total.toStringAsFixed(0)}",
                     style: TextStyle(
-                        fontSize: 26,
+                        fontSize: 24,
                         fontWeight: FontWeight.bold,
                         color: AppColors.primary)),
                 if (widget.discount > 0)
                   Text("Saved ₹${widget.discount.toStringAsFixed(0)}",
                       style: const TextStyle(
-                          fontSize: 11,
+                          fontSize: 10.5,
                           color: Colors.green,
                           fontWeight: FontWeight.w600)),
               ]),
-          const SizedBox(width: 16),
+          const SizedBox(width: 14),
           Expanded(
             child: GestureDetector(
               onTap: _processing ? null : _onConfirm,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                height: 54,
+                height: 48,
                 decoration: BoxDecoration(
                   gradient: _method == null
                       ? LinearGradient(colors: [
@@ -810,21 +1179,21 @@ Future<void> _clearCart() async {
                           Colors.grey.shade400
                         ])
                       : AppColors.gradient,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                   boxShadow: _method != null
                       ? [
                           BoxShadow(
-                              color: AppColors.primary.withOpacity(0.35),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4))
+                              color: AppColors.primary.withOpacity(0.3),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3))
                         ]
                       : [],
                 ),
                 child: Center(
                   child: _processing
                       ? const SizedBox(
-                          width: 22,
-                          height: 22,
+                          width: 20,
+                          height: 20,
                           child: CircularProgressIndicator(
                               color: Colors.white, strokeWidth: 2))
                       : Row(
@@ -835,7 +1204,7 @@ Future<void> _clearCart() async {
                                     ? Icons.flash_on_rounded
                                     : Icons.check_circle_outline_rounded,
                                 color: Colors.white,
-                                size: 20),
+                                size: 18),
                             const SizedBox(width: 8),
                             Text(
                               _method == null
@@ -845,7 +1214,7 @@ Future<void> _clearCart() async {
                                       : "Pay ₹${widget.total.toStringAsFixed(0)}",
                               style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 14.5,
                                   fontWeight: FontWeight.bold),
                             ),
                           ]),

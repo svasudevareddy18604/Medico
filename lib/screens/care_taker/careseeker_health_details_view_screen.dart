@@ -81,7 +81,7 @@ class _CareseekerHealthDetailsViewScreenState
     final Uri url = Uri.parse('tel:$phone');
     if (await canLaunchUrl(url)) {
       await launchUrl(url);
-    } else {
+    } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not launch phone dialer')),
       );
@@ -95,114 +95,84 @@ class _CareseekerHealthDetailsViewScreenState
       body: _loading
           ? const Center(
               child: CircularProgressIndicator(color: AppColors.primary))
-          : _error
-              ? _buildErrorView()
-              : Column(
-                  children: [
-                    // Curved Header - Matching the image style (teal/gradient)
-                    _buildCurvedHeader(),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _buildBasicInfoCard(),
-                            const SizedBox(height: 20),
-                            _buildMedicalInfoCard(),
-                            const SizedBox(height: 20),
-                            _buildEmergencyContactCard(),
-                            const SizedBox(height: 20),
-                            _buildLifestyleCard(),
-                            const SizedBox(height: 20),
-                            if (_profile['special_instructions']?.toString().isNotEmpty == true)
-                              _buildSpecialInstructionsCard(),
-                          ],
+          : Column(
+              children: [
+                _buildHeader(),
+                Expanded(
+                  child: _error
+                      ? _buildErrorView()
+                      : SingleChildScrollView(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildBasicInfoCard(),
+                              const SizedBox(height: 16),
+                              _buildMedicalInfoCard(),
+                              const SizedBox(height: 16),
+                              _buildEmergencyContactCard(),
+                              const SizedBox(height: 16),
+                              _buildLifestyleCard(),
+                              const SizedBox(height: 16),
+                              if (_profile['special_instructions']
+                                      ?.toString()
+                                      .isNotEmpty ==
+                                  true) ...[
+                                _buildSpecialInstructionsCard(),
+                                const SizedBox(height: 16),
+                              ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ),
-                  ],
                 ),
+              ],
+            ),
     );
   }
 
-  Widget _buildCurvedHeader() {
-    return ClipPath(
-      clipper: CurvedHeaderClipper(),
-      child: Container(
-        height: 160,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              Color(0xFF00BFA5), // Teal like in image
-              Color(0xFF26A69A),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+  // ── Clean, minimal header ─────────────────────────
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 52, 16, 20),
+      decoration: BoxDecoration(
+        gradient: AppColors.gradient,
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white, size: 18),
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          const SizedBox(width: 14),
+          const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    const Text(
-                      "Careseeker Health Profile",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 40), // Balance
-                  ],
+                Text(
+                  "Health Profile",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold),
                 ),
-                const Spacer(),
-                // Optional profile info in header
-                Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 24,
-                      backgroundColor: Colors.white,
-                      child: Icon(Icons.person, size: 28, color: AppColors.primary),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _profile['full_name'] ?? "Careseeker",
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                          Text(
-                            "Order #${widget.orderId}",
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.white.withOpacity(0.9),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                SizedBox(height: 2),
+                Text(
+                  "Confidential medical information",
+                  style: TextStyle(color: Colors.white70, fontSize: 12.5),
                 ),
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -216,7 +186,7 @@ class _CareseekerHealthDetailsViewScreenState
         _infoRow("Gender", _profile['gender'] ?? "Not provided"),
         _infoRow("Height", _profile['height'] != null ? "${_profile['height']} cm" : "Not provided"),
         _infoRow("Weight", _profile['weight'] != null ? "${_profile['weight']} kg" : "Not provided"),
-        _infoRow("Blood Group", _profile['blood_group'] ?? "Unknown"),
+        _infoRow("Blood Group", _profile['blood_group'] ?? "Unknown", isLast: true),
       ],
     );
   }
@@ -230,7 +200,7 @@ class _CareseekerHealthDetailsViewScreenState
         _infoRow("Allergies", _profile['allergies'] ?? "None"),
         _infoRow("Current Medications", _profile['current_medications'] ?? "None"),
         _infoRow("Mobility", _profile['mobility'] ?? "Not specified"),
-        _infoRow("Assistance Required", _profile['assistance_required'] ?? "None"),
+        _infoRow("Assistance Required", _profile['assistance_required'] ?? "None", isLast: true),
       ],
     );
   }
@@ -244,18 +214,47 @@ class _CareseekerHealthDetailsViewScreenState
       children: [
         _infoRow("Name", _profile['emergency_contact_name'] ?? "Not provided"),
         _infoRow("Relationship", _profile['emergency_contact_relationship'] ?? "Not provided"),
-        Row(
-          children: [
-            Expanded(
-              child: _infoRow("Phone", phone.isEmpty ? "Not provided" : phone),
-            ),
-            if (phone.isNotEmpty)
-              IconButton(
-                onPressed: () => _makeCall(phone),
-                icon: const Icon(Icons.phone, color: Colors.green, size: 28),
-                tooltip: "Call Now",
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 140,
+                child: Text(
+                  "Phone",
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
-          ],
+              Expanded(
+                child: Text(
+                  phone.isEmpty ? "Not provided" : phone,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+              if (phone.isNotEmpty)
+                GestureDetector(
+                  onTap: () => _makeCall(phone),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.phone_rounded,
+                        color: Colors.green, size: 20),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
     );
@@ -267,7 +266,7 @@ class _CareseekerHealthDetailsViewScreenState
       icon: Icons.favorite_outline,
       children: [
         _infoRow("Smoking", _profile['smoking'] ?? "Not specified"),
-        _infoRow("Alcohol", _profile['alcohol'] ?? "Not specified"),
+        _infoRow("Alcohol", _profile['alcohol'] ?? "Not specified", isLast: true),
       ],
     );
   }
@@ -278,10 +277,10 @@ class _CareseekerHealthDetailsViewScreenState
       icon: Icons.note_alt_outlined,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: 4),
           child: Text(
             _profile['special_instructions'] ?? "",
-            style: const TextStyle(fontSize: 15, height: 1.5),
+            style: const TextStyle(fontSize: 14.5, height: 1.5),
           ),
         ),
       ],
@@ -298,12 +297,13 @@ class _CareseekerHealthDetailsViewScreenState
       width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFEEF1F5)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -311,15 +311,15 @@ class _CareseekerHealthDetailsViewScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
             child: Row(
               children: [
-                Icon(icon, color: color ?? AppColors.primary, size: 26),
-                const SizedBox(width: 12),
+                Icon(icon, color: color ?? AppColors.primary, size: 22),
+                const SizedBox(width: 10),
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 18,
+                    fontSize: 16.5,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -328,7 +328,7 @@ class _CareseekerHealthDetailsViewScreenState
           ),
           const Divider(height: 1, thickness: 1, color: Color(0xFFF1F5F9)),
           Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(18, 6, 18, 16),
             child: Column(children: children),
           ),
         ],
@@ -336,9 +336,9 @@ class _CareseekerHealthDetailsViewScreenState
     );
   }
 
-  Widget _infoRow(String label, String value) {
+  Widget _infoRow(String label, String value, {bool isLast = false}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+      padding: EdgeInsets.only(top: 10, bottom: isLast ? 0 : 0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -388,25 +388,4 @@ class _CareseekerHealthDetailsViewScreenState
       ),
     );
   }
-}
-
-// Custom Clipper for Curved Header (matches modern app style like the image)
-class CurvedHeaderClipper extends CustomClipper<Path> {
-  @override
-  Path getClip(Size size) {
-    final path = Path();
-    path.lineTo(0, size.height - 40);
-    path.quadraticBezierTo(
-      size.width * 0.5,
-      size.height,
-      size.width,
-      size.height - 40,
-    );
-    path.lineTo(size.width, 0);
-    path.close();
-    return path;
-  }
-
-  @override
-  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
 }

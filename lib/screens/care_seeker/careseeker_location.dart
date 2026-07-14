@@ -34,9 +34,16 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
   bool loadingLocation = false, saving = false;
   List<dynamic> addresses = [];
 
-  // ✅ NEW: tracks which address card is currently being confirmed (shows a
-  // small inline spinner on that specific card instead of a separate FAB).
+  // ✅ Transient state: which card is mid-network-call right now.
   int? _confirmingAddressId;
+
+  // ✅ NEW: persistent state — which address is the ACTIVE / chosen one.
+  // Unlike _confirmingAddressId (which only lights up for a split second
+  // while the API calls run), this stays set for as long as that address
+  // is the one in effect, so the "Selected" mark never disappears.
+  int? _selectedAddressId;
+
+  bool _deletedActiveAddress = false;
 
   bool get isDark => themeNotifier.value == ThemeMode.dark;
   void _onThemeChange() { if (mounted) setState(() {}); }
@@ -70,7 +77,11 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
       if (res.statusCode == 200) {
         final list = jsonDecode(res.body) as List;
         setState(() => addresses = list);
-        if (list.isEmpty) { await Future.delayed(const Duration(milliseconds: 500)); if (mounted) await detectLocation(silent: true); }
+        await _resolveSelectedAddress(list);
+        if (list.isEmpty) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (mounted) await detectLocation(silent: true);
+        }
       }
     } catch (_) {}
   }
@@ -78,8 +89,53 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
   Future<void> fetchAddresses() async {
     try {
       final res = await http.get(Uri.parse("${Api.baseUrl}/addresses/${widget.userId}"));
-      if (res.statusCode == 200) setState(() => addresses = jsonDecode(res.body));
+      if (res.statusCode == 200) {
+        final list = jsonDecode(res.body) as List;
+        setState(() => addresses = list);
+      }
     } catch (_) {}
+  }
+
+  /// ✅ NEW: works out which address should be marked "Selected" and keeps
+  /// it that way without requiring the user to tap anything.
+  ///
+  /// Priority:
+  /// 1. Exactly one address on file -> that's automatically the selected one.
+  /// 2. A previously-chosen address (saved in SharedPreferences) that still exists.
+  /// 3. Whatever the backend has flagged as `is_default`.
+  /// 4. Nothing selected.
+  Future<void> _resolveSelectedAddress(List<dynamic> list) async {
+    if (list.isEmpty) {
+      if (mounted) setState(() => _selectedAddressId = null);
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final storedId = prefs.getInt("selected_address_id_${widget.userId}");
+
+    // Only one address -> no decision for the user to make, just adopt it.
+    if (list.length == 1) {
+      final only = list.first;
+      if (storedId == only["id"]) {
+        if (mounted) setState(() => _selectedAddressId = only["id"]);
+      } else {
+        await _selectAddress(only, silent: true);
+      }
+      return;
+    }
+
+    final storedStillExists = storedId != null && list.any((a) => a["id"] == storedId);
+    if (storedStillExists) {
+      if (mounted) setState(() => _selectedAddressId = storedId);
+      return;
+    }
+
+    final defaultAddr = list.firstWhere(
+      (a) => a["is_default"] == 1 || a["is_default"] == true,
+      orElse: () => null,
+    );
+
+    if (mounted) setState(() => _selectedAddressId = defaultAddr != null ? defaultAddr["id"] : null);
   }
 
   Future<bool> _ensurePermission() async {
@@ -132,7 +188,9 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
     setState(() => saving = false);
     if (res.statusCode == 200 || res.statusCode == 201) {
       showToast("Address saved successfully", type: ToastType.success);
-      await fetchAddresses(); _clearForm();
+      await fetchAddresses();
+      await _resolveSelectedAddress(addresses); // ✅ auto-select if this is now the only address
+      _clearForm();
     } else {
       showToast("Failed to save address", type: ToastType.error);
     }
@@ -145,17 +203,52 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
   }
 
   Future<void> deleteAddress(int id) async {
-    await http.delete(Uri.parse("${Api.baseUrl}/addresses/delete/$id"));
-    fetchAddresses(); showToast("Address deleted", type: ToastType.info);
+    try {
+      final res = await http.delete(Uri.parse("${Api.baseUrl}/addresses/delete/$id"));
+
+      if (res.statusCode != 200 && res.statusCode != 204) {
+        if (mounted) showToast("Failed to delete address", type: ToastType.error);
+        return;
+      }
+
+      if (_confirmingAddressId == id && mounted) {
+        setState(() => _confirmingAddressId = null);
+      }
+
+      final wasSelected = _selectedAddressId == id;
+
+      if (wasSelected) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove("selected_address_id_${widget.userId}");
+        await prefs.remove("user_location_${widget.userId}");
+        await prefs.remove("user_lat_${widget.userId}");
+        await prefs.remove("user_lng_${widget.userId}");
+        _deletedActiveAddress = true;
+        if (mounted) setState(() => _selectedAddressId = null);
+
+        try {
+          await http.post(Uri.parse("${Api.baseUrl}/addresses/set-default"),
+              headers: {"Content-Type": "application/json"},
+              body: jsonEncode({"user_id": widget.userId, "address_id": null}));
+        } catch (_) {}
+      }
+
+      await fetchAddresses();
+      await _resolveSelectedAddress(addresses); // ✅ re-evaluate — e.g. auto-pick if only 1 is left
+      if (mounted) showToast("Address deleted", type: ToastType.info);
+    } catch (_) {
+      if (mounted) showToast("Failed to delete address", type: ToastType.error);
+    }
   }
 
-  // ✅ NEW IDEA: one tap = select AND confirm. No separate "Confirm Address"
-  // button anymore. Tapping a card immediately runs the location-eligibility
-  // check, saves it as the active address, and closes the screen — with a
-  // small inline spinner on that card so the user sees it's processing.
-  Future<void> _selectAddress(dynamic a) async {
-    if (_confirmingAddressId != null) return; // prevent double taps mid-flight
-    setState(() => _confirmingAddressId = a["id"]);
+  /// [silent] = true means this is an automatic pick (only-one-address case)
+  /// — no spinner UI, no toast, no navigating away. It just quietly marks
+  /// the address as selected in the background.
+  Future<void> _selectAddress(dynamic a, {bool silent = false}) async {
+    if (!silent) {
+      if (_confirmingAddressId != null) return;
+      setState(() => _confirmingAddressId = a["id"]);
+    }
 
     try {
       final allowed = await LocationCheckService.checkLocation(
@@ -164,7 +257,11 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
       if (!mounted) return;
 
       if (!allowed) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => LocationBlockScreen(userId: widget.userId)));
+        if (!silent) {
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => LocationBlockScreen(userId: widget.userId)));
+        } else if (mounted) {
+          setState(() => _confirmingAddressId = null);
+        }
         return;
       }
 
@@ -177,11 +274,22 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
       await prefs.setDouble("user_lat_${widget.userId}", double.tryParse(a["latitude"].toString()) ?? 0.0);
       await prefs.setDouble("user_lng_${widget.userId}", double.tryParse(a["longitude"].toString()) ?? 0.0);
 
+      _deletedActiveAddress = false;
       if (!mounted) return;
-      Navigator.pop(context);
+
+      setState(() {
+        _selectedAddressId = a["id"];
+        _confirmingAddressId = null;
+      });
+
+      if (!silent) {
+        Navigator.pop(context);
+      }
     } catch (_) {
       if (mounted) {
-        showToast("Could not select this address. Try again.", type: ToastType.error);
+        if (!silent) {
+          showToast("Could not select this address. Try again.", type: ToastType.error);
+        }
         setState(() => _confirmingAddressId = null);
       }
     }
@@ -221,8 +329,6 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      // ✅ FAB removed — selection now happens directly on tap of an address
-      // card, so a separate "Confirm" action would just be a redundant step.
       body: Column(children: [
         Container(
           width: double.infinity,
@@ -312,8 +418,6 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
             Text("Saved Addresses", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
             const SizedBox(height: 8),
 
-            // ✅ NEW: professional inline info banner explaining the one-tap
-            // selection behaviour, replacing the old italic hint line.
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -327,8 +431,9 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    "Select the booking address you'd like to use by tapping it once. "
-                    "It will be applied automatically — no extra confirmation needed.",
+                    addresses.length <= 1
+                        ? "This address will be used automatically for your bookings."
+                        : "Tap an address to make it your active booking address.",
                     style: TextStyle(
                       fontSize: 12.5,
                       height: 1.35,
@@ -350,39 +455,56 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
                 final a = addresses[i];
                 final bool isConfirming = _confirmingAddressId == a["id"];
                 final bool anyConfirming = _confirmingAddressId != null;
+                final bool isSelected = _selectedAddressId == a["id"]; // ✅ persistent, not transient
+
                 return GestureDetector(
-                  onTap: anyConfirming ? null : () => _selectAddress(a),
+                  onTap: anyConfirming
+                      ? null
+                      : () {
+                          // Already the active address — nothing to confirm, just leave.
+                          if (isSelected) {
+                            Navigator.pop(context);
+                            return;
+                          }
+                          _selectAddress(a);
+                        },
                   child: Opacity(
                     opacity: (anyConfirming && !isConfirming) ? 0.5 : 1,
                     child: Container(
                       margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: isConfirming ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.08) : cardBg,
+                        color: (isConfirming || isSelected) ? AppColors.primary.withOpacity(isDark ? 0.15 : 0.08) : cardBg,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: isConfirming ? AppColors.primary : (isDark ? Colors.grey.shade700 : Colors.grey.shade300), width: isConfirming ? 2.5 : 1),
+                        border: Border.all(
+                          color: (isConfirming || isSelected) ? AppColors.primary : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
+                          width: (isConfirming || isSelected) ? 2.5 : 1,
+                        ),
                         boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 10, offset: const Offset(0, 3))],
                       ),
                       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        // Tap indicator: plain circle normally, spinner while this
-                        // specific card is being confirmed.
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: SizedBox(
                             width: 24, height: 24,
                             child: isConfirming
                                 ? CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.primary)
-                                : Container(
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                          color: isDark ? Colors.grey.shade600 : Colors.grey.shade400,
-                                          width: 2),
-                                    ),
-                                  ),
+                                : isSelected
+                                    ? Container(
+                                        decoration: BoxDecoration(shape: BoxShape.circle, color: AppColors.primary),
+                                        child: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+                                      )
+                                    : Container(
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                              color: isDark ? Colors.grey.shade600 : Colors.grey.shade400,
+                                              width: 2),
+                                        ),
+                                      ),
                           ),
                         ),
                         const SizedBox(width: 14),
-                        Icon(Icons.location_on_rounded, color: isConfirming ? AppColors.primary : (isDark ? Colors.grey.shade400 : Colors.grey[600]), size: 30),
+                        Icon(Icons.location_on_rounded, color: (isConfirming || isSelected) ? AppColors.primary : (isDark ? Colors.grey.shade400 : Colors.grey[600]), size: 30),
                         const SizedBox(width: 12),
                         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Row(children: [
@@ -392,6 +514,12 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                 decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
                                 child: const Text("SELECTING...", style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                              )
+                            else if (isSelected)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
+                                child: const Text("SELECTED", style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
                               ),
                           ]),
                           const SizedBox(height: 4),
@@ -488,4 +616,4 @@ class _ToastWidgetState extends State<_ToastWidget> with SingleTickerProviderSta
 class _ToastStyle {
   final Color bg, accent; final IconData icon; final String label;
   const _ToastStyle(this.bg, this.accent, this.icon, this.label);
-}   
+}

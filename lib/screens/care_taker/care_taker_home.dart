@@ -594,7 +594,7 @@ class _CareTakerHomeState extends State<CareTakerHome>
                       Text(
                         isLocked
                             ? "Account Locked"
-                            : (isAvailable ? "You're Online" : "You're Offline"),
+                            : (isAvailable ? "On Duty" : "Off Duty"),
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w800,

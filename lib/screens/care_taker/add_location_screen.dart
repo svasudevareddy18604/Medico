@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:medico/utils/app_colors.dart';
 
 import '../../config/api.dart';
@@ -32,6 +34,11 @@ class _AddLocationScreenState extends State<AddLocationScreen> {
   final areaController = TextEditingController();
   final landmarkController = TextEditingController();
   final pincodeController = TextEditingController();
+
+  final mapController = MapController();
+
+  // ✅ Default center (same fallback point used on care seeker screen)
+  LatLng selectedLocation = const LatLng(13.0827, 80.2707);
 
   double? latitude;
   double? longitude;
@@ -119,22 +126,46 @@ class _AddLocationScreenState extends State<AddLocationScreen> {
       latitude = pos.latitude;
       longitude = pos.longitude;
 
-      List<Placemark> p =
-          await placemarkFromCoordinates(latitude!, longitude!);
+      // ✅ Move map + marker to the detected point
+      selectedLocation = LatLng(latitude!, longitude!);
+      mapController.move(selectedLocation, 17);
 
-      final place = p.first;
-
-      addressController.text =
-          "${place.street ?? ""}, ${place.subLocality ?? ""}";
-      areaController.text = place.locality ?? "";
-      landmarkController.text = place.name ?? "";
-      pincodeController.text = place.postalCode ?? "";
-
+      await _fillAddressFromLatLng(selectedLocation);
     } catch (e) {
       showMsg("Location error");
     }
 
     setState(() => loading = false);
+  }
+
+  /* ================= REVERSE GEOCODE (shared by tap + detect) ================= */
+
+  Future<void> _fillAddressFromLatLng(LatLng point) async {
+    try {
+      List<Placemark> p =
+          await placemarkFromCoordinates(point.latitude, point.longitude);
+
+      final place = p.first;
+
+      setState(() {
+        addressController.text =
+            "${place.street ?? ""}, ${place.subLocality ?? ""}";
+        areaController.text = place.locality ?? "";
+        landmarkController.text = place.name ?? "";
+        pincodeController.text = place.postalCode ?? "";
+        latitude = point.latitude;
+        longitude = point.longitude;
+      });
+    } catch (_) {
+      showMsg("Could not fetch address for this point");
+    }
+  }
+
+  /* ================= MAP TAP ================= */
+
+  Future<void> _onMapTap(LatLng point) async {
+    setState(() => selectedLocation = point);
+    await _fillAddressFromLatLng(point);
   }
 
   /* ================= SAVE ================= */
@@ -143,7 +174,7 @@ class _AddLocationScreenState extends State<AddLocationScreen> {
 
     // 🔥 STRICT RULE
     if (latitude == null || longitude == null) {
-      showMsg("⚠️ Auto-detect location is required");
+      showMsg("⚠️ Auto-detect or tap the map to set your location");
       return;
     }
 
@@ -245,6 +276,69 @@ class _AddLocationScreenState extends State<AddLocationScreen> {
               child: Column(
                 children: [
 
+                  // 🔥 OPEN STREET MAP
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: SizedBox(
+                      height: 240,
+                      child: Stack(
+                        children: [
+                          FlutterMap(
+                            mapController: mapController,
+                            options: MapOptions(
+                              initialCenter: selectedLocation,
+                              initialZoom: 15,
+                              onTap: (_, latlng) => _onMapTap(latlng),
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate:
+                                    "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                                userAgentPackageName: 'com.yourapp.care',
+                              ),
+                              MarkerLayer(markers: [
+                                Marker(
+                                  point: selectedLocation,
+                                  width: 50,
+                                  height: 50,
+                                  child: const Icon(
+                                    Icons.location_pin,
+                                    color: Colors.red,
+                                    size: 50,
+                                  ),
+                                ),
+                              ]),
+                            ],
+                          ),
+
+                          // Small helper chip so it's clear the map is tappable
+                          Positioned(
+                            left: 10,
+                            top: 10,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.55),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text(
+                                "Tap map to set location",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
                   // 🔥 AUTO DETECT CARD
                   Container(
                     padding: const EdgeInsets.all(18),
@@ -266,10 +360,21 @@ class _AddLocationScreenState extends State<AddLocationScreen> {
                         const SizedBox(height: 10),
 
                         ElevatedButton.icon(
-                          icon: const Icon(Icons.gps_fixed),
-                          label: const Text("Auto Detect Location"),
+                          icon: loading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2.4,
+                                  ),
+                                )
+                              : const Icon(Icons.gps_fixed),
+                          label: Text(
+                              loading ? "Detecting..." : "Auto Detect Location"),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
                             minimumSize:
                                 const Size(double.infinity, 50),
                           ),
