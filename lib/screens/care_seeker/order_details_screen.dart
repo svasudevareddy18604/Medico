@@ -56,6 +56,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   bool   get _completed  => _status == "COMPLETED";
   bool   get _cancellable => ["CONFIRMED", "ACCEPTED"].contains(_status);
 
+  String get _cancelledBy      => (_order["cancelled_by"] ?? "").toString().trim().toLowerCase();
+  bool   get _cancelledByAdmin => _cancelledBy == "admin";
+
   bool get _shouldBlockScreenshot =>
       ["ACCEPTED", "ON_THE_WAY", "COMPLETED"].contains(_status);
 
@@ -326,9 +329,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                         _trackPromptCard(),
                       ],
 
-                      const SizedBox(height: 20),
-                      _sectionLabel("Your Caretaker"),
-                      _caretakerMiniCard(),
+                      if (!_cancelled) ...[
+  const SizedBox(height: 20),
+  _sectionLabel("Your Caretaker"),
+  _caretakerMiniCard(),
+],
 
                       const SizedBox(height: 20),
                       _detailsToggle(),
@@ -556,22 +561,42 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
           ),
         ),
         child: _cancelled
-            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Icon(Icons.cancel_outlined, color: AppColors.danger, size: 14),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _order["cancel_reason"]?.toString().trim().isNotEmpty == true
-                          ? "Reason: ${_order["cancel_reason"]}"
-                          : "This booking was cancelled.",
-                      style: TextStyle(
-                        color: AppColors.danger, fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
+    ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(
+            _cancelledByAdmin ? Icons.admin_panel_settings_rounded : Icons.cancel_outlined,
+            color: AppColors.danger, size: 14,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _cancelledByAdmin
+                      ? "Booking Cancelled by the Medico team"
+                      : "You cancelled this booking",
+                  style: TextStyle(
+                    color: AppColors.danger, fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (_order["cancel_reason"]?.toString().trim().isNotEmpty == true) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    "Reason: ${_order["cancel_reason"]}",
+                    style: TextStyle(
+                      color: AppColors.danger.withOpacity(0.85),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                      height: 1.4,
                     ),
                   ),
-                ]),
+                ],
+              ],
+            ),
+          ),
+        ]),
                 if (_order["refund_status"] != null &&
                     _order["refund_status"] != "NOT_ELIGIBLE") ...[
                   const SizedBox(height: 10),
