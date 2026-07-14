@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'dart:ui';
 import 'dart:convert';
@@ -50,9 +52,26 @@ Future<void> main() async {
 
   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
   String languageCode = prefs.getString("language_code") ?? "en";
-localeNotifier.value = Locale(languageCode);
+  localeNotifier.value = Locale(languageCode);
 
   runApp(const MyApp());
+}
+
+/* ===============================
+   🖼️ DOWNLOAD IMAGE FOR NOTIFICATION
+================================ */
+Future<String> _downloadAndSaveFile(String url, String fileName) async {
+  final directory = await getApplicationDocumentsDirectory();
+
+  final filePath = '${directory.path}/$fileName';
+
+  final response = await http.get(Uri.parse(url));
+
+  final file = File(filePath);
+
+  await file.writeAsBytes(response.bodyBytes);
+
+  return filePath;
 }
 
 /* ===============================
@@ -88,25 +107,69 @@ Future<void> setupNotifications() async {
           AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
 
-  // ✅ FOREGROUND FIX (CRITICAL)
+  // ✅ FOREGROUND FIX (CRITICAL) — now with image support
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
     print("📩 FOREGROUND RECEIVED: ${message.notification?.title}");
 
-    if (message.notification != null) {
-      await flutterLocalNotificationsPlugin.show(
-        DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        message.notification!.title,
-        message.notification!.body,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'medico_channel',
-            'Medico Notifications',
-            importance: Importance.max,
-            priority: Priority.high,
-          ),
-        ),
+    final notification = message.notification;
+
+    if (notification == null) return;
+
+    String? imageUrl;
+
+    if (message.data["image"] != null &&
+        message.data["image"].toString().isNotEmpty) {
+      imageUrl = message.data["image"];
+    } else {
+      imageUrl = notification.android?.imageUrl;
+    }
+
+    AndroidNotificationDetails androidDetails;
+
+    if (imageUrl != null && imageUrl.isNotEmpty) {
+      try {
+        final imagePath =
+            await _downloadAndSaveFile(imageUrl, "notification.jpg");
+
+        final bigPictureStyle = BigPictureStyleInformation(
+          FilePathAndroidBitmap(imagePath),
+          largeIcon: FilePathAndroidBitmap(imagePath),
+          contentTitle: notification.title,
+          summaryText: notification.body,
+        );
+
+        androidDetails = AndroidNotificationDetails(
+          'medico_channel',
+          'Medico Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+          styleInformation: bigPictureStyle,
+        );
+      } catch (e) {
+        print("❌ Image download failed: $e");
+
+        androidDetails = const AndroidNotificationDetails(
+          'medico_channel',
+          'Medico Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+        );
+      }
+    } else {
+      androidDetails = const AndroidNotificationDetails(
+        'medico_channel',
+        'Medico Notifications',
+        importance: Importance.max,
+        priority: Priority.high,
       );
     }
+
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      notification.title,
+      notification.body,
+      NotificationDetails(android: androidDetails),
+    );
   });
 
   // ✅ CLICK HANDLER
