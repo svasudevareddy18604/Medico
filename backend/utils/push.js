@@ -1,32 +1,49 @@
 const admin = require("../utils/firebase");
 
-/*
-  Send push notification
-*/
-const sendPushNotification = async (fcmToken, title, body) => {
+const sendPushNotification = async (
+  fcmToken,
+  title,
+  body,
+  imageUrl = null
+) => {
   try {
-    if (!fcmToken) {
-      console.log("FCM token missing");
-      return;
-    }
+    if (!fcmToken) return;
 
     const message = {
+      token: fcmToken,
+
       notification: {
         title,
         body,
+        ...(imageUrl ? { image: imageUrl } : {})
       },
-      token: fcmToken,
+
+      android: {
+        notification: {
+          ...(imageUrl ? { imageUrl } : {})
+        }
+      },
+
+      apns: {
+        payload: {
+          aps: {
+            "mutable-content": 1
+          }
+        },
+        fcm_options: imageUrl
+          ? {
+              image: imageUrl
+            }
+          : undefined
+      }
     };
 
     const response = await admin.messaging().send(message);
 
-    console.log("🔔 Notification sent:", response);
-
-  } catch (error) {
-    console.error("❌ Push error:", error);
+    console.log("Notification sent:", response);
+  } catch (err) {
+    console.error(err);
   }
 };
 
-module.exports = {
-  sendPushNotification,
-};
+module.exports = { sendPushNotification };

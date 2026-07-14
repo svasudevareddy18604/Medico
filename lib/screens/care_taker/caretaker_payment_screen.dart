@@ -315,7 +315,7 @@ class _CaretakerPaymentScreenState extends State<CaretakerPaymentScreen> {
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
-                          fontWeight: FontWeight.w600),
+                          fontWeight: FontWeight.w800),
                     ),
                   ),
                 ]),
@@ -421,7 +421,10 @@ class _CaretakerPaymentScreenState extends State<CaretakerPaymentScreen> {
 
   Widget _codSection() => Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(
+  horizontal: 20,
+  vertical: 28,
+),
         decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(18),
@@ -452,7 +455,7 @@ class _CaretakerPaymentScreenState extends State<CaretakerPaymentScreen> {
           const SizedBox(height: 20),
           ClipRRect(
             borderRadius: BorderRadius.circular(16),
-            child: QrImageView(data: _upiLink, size: 200),
+            child: QrImageView(data: _upiLink, size: 340),
           ),
           const SizedBox(height: 8),
           Text("Scan to pay ₹$_total",
