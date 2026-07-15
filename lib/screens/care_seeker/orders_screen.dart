@@ -30,19 +30,24 @@ class _OrdersScreenState extends State<OrdersScreen>
 
   bool get _dark => themeNotifier.value == ThemeMode.dark;
 
-  // ── Deep green for COMPLETED ───────────────────────────────────────────
+  // ── Deep green for COMPLETED (kept for reference but not used) ───────
   static const Color _completedGreen = Color(0xFF16A34A);
 
-  // ── Status config ─────────────────────────────────────────────────────
+  // ── Active Statuses Only ──────────────────────────────────────────────
+  static const _activeStatuses = [
+    "CONFIRMED",
+    "ACCEPTED",
+    "IN_PROGRESS",
+    "ON_THE_WAY",
+  ];
 
+  // ── Filters (Only Active Bookings) ────────────────────────────────────
   static const _filters = [
     "All",
     "CONFIRMED",
     "ACCEPTED",
     "IN_PROGRESS",
     "ON_THE_WAY",
-    "COMPLETED",
-    "CANCELLED",
   ];
 
   static String _label(String s) => switch (s.toUpperCase()) {
@@ -50,28 +55,22 @@ class _OrdersScreenState extends State<OrdersScreen>
     "ACCEPTED"    => "Assigned",
     "IN_PROGRESS" => "In Progress",
     "ON_THE_WAY"  => "On The Way",
-    "COMPLETED"   => "Completed",
-    "CANCELLED"   => "Cancelled",
     _             => s,
   };
 
   static Color _statusColor(String s) => switch (s.toUpperCase()) {
-    "COMPLETED"   => _completedGreen,   // ← was AppColors.success (too light)
     "ACCEPTED"    => AppColors.primary,
     "IN_PROGRESS" => AppColors.secondary,
     "ON_THE_WAY"  => AppColors.accent,
     "CONFIRMED"   => AppColors.warning,
-    "CANCELLED"   => AppColors.danger,
     _             => AppColors.muted,
   };
 
   static IconData _statusIcon(String s) => switch (s.toUpperCase()) {
-    "COMPLETED"   => Icons.check_circle_rounded,
     "ACCEPTED"    => Icons.assignment_turned_in_rounded,
     "IN_PROGRESS" => Icons.handyman_rounded,
     "ON_THE_WAY"  => Icons.directions_bike_rounded,
     "CONFIRMED"   => Icons.hourglass_top_rounded,
-    "CANCELLED"   => Icons.cancel_rounded,
     _             => Icons.help_outline_rounded,
   };
 
@@ -112,8 +111,8 @@ class _OrdersScreenState extends State<OrdersScreen>
 
   void _startTimer() {
     _timer?.cancel();
-    final hasActive = _orders.any((o) => !["COMPLETED", "CANCELLED"]
-        .contains((o["status"] ?? "").toString().toUpperCase()));
+    final hasActive = _orders.any((o) =>
+        _activeStatuses.contains((o["status"] ?? "").toString().toUpperCase()));
     _timer = Timer.periodic(
         Duration(seconds: hasActive ? 12 : 30), (_) => _load(silent: true));
   }
@@ -161,18 +160,22 @@ class _OrdersScreenState extends State<OrdersScreen>
   }
 
   List get _filtered {
-    final list = [..._orders];
+    // Filter only active bookings
+    var list = [..._orders].where((o) {
+      final status = (o["status"] ?? "").toString().toUpperCase();
+      return _activeStatuses.contains(status);
+    }).toList();
+
+    // Sort: Newest first
     list.sort((a, b) {
-      const done = ["COMPLETED", "CANCELLED"];
-      final aC = done.contains((a["status"] ?? "").toUpperCase()) ? 1 : 0;
-      final bC = done.contains((b["status"] ?? "").toUpperCase()) ? 1 : 0;
-      if (aC != bC) return aC.compareTo(bC);
       try {
         return DateTime.parse(b["date"].toString())
             .compareTo(DateTime.parse(a["date"].toString()));
       } catch (_) { return 0; }
     });
+
     if (_filter == "All") return list;
+
     return list
         .where((o) =>
             (o["status"] ?? "").toString().toUpperCase() == _filter)
@@ -263,7 +266,7 @@ class _OrdersScreenState extends State<OrdersScreen>
         const SizedBox(width: 12),
         const Expanded(
           child: Text(
-            "My Bookings",
+            "Active Bookings",
             style: TextStyle(
               color: Colors.white,
               fontSize: 22,
@@ -287,11 +290,9 @@ class _OrdersScreenState extends State<OrdersScreen>
           child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.fiber_manual_record,
-                  color: Colors.greenAccent, size: 8),
               SizedBox(width: 5),
               Text(
-                "Live",
+                "",
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 11,
@@ -382,217 +383,213 @@ class _OrdersScreenState extends State<OrdersScreen>
     final svcCharge = num.tryParse(
         order["service_charge"]?.toString() ?? "0") ?? 0;
     final payment   = (order["payment_method"] ?? "COD").toString();
-    final cancelled = statusUp == "CANCELLED";
     final hasCharge = svcCharge > 0;
 
     final cardBg = _dark ? const Color(0xFF1E293B) : AppColors.cardBg;
 
-    return Opacity(
-      opacity: cancelled ? 0.65 : 1.0,
-      child: GestureDetector(
-        onTap: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => OrderDetailsScreen(orders: [order]),
-            ),
-          );
-          _load(silent: true);
-        },
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-          decoration: BoxDecoration(
-            color: cardBg,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppColors.border, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(_dark ? 0.18 : 0.06),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OrderDetailsScreen(orders: [order]),
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+        );
+        _load(silent: true);
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(_dark ? 0.18 : 0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
 
-                // ── Top accent stripe ──────────────────────────────────
-                Container(
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: color,
-                  ),
+              // ── Top accent stripe ──────────────────────────────────
+              Container(
+                height: 4,
+                decoration: BoxDecoration(
+                  color: color,
                 ),
+              ),
 
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
 
-                      // ── Order code + Status chip ───────────────────
-                      Row(children: [
-                        const Icon(Icons.tag_rounded,
-                            size: 13, color: AppColors.primary),
-                        const SizedBox(width: 5),
+                    // ── Order code + Status chip ───────────────────
+                    Row(children: [
+                      const Icon(Icons.tag_rounded,
+                          size: 13, color: AppColors.primary),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          code,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
+                            color: AppColors.primary,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ),
+                      _statusChip(_label(status), color, icon),
+                    ]),
+
+                    const SizedBox(height: 10),
+
+                    // ── Service name + Total ───────────────────────
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Expanded(
                           child: Text(
-                            code,
+                            svc,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12.5,
-                              color: AppColors.primary,
-                              letterSpacing: 0.4,
+                            maxLines: 2,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: _dark ? Colors.white : AppColors.dark,
+                              height: 1.3,
                             ),
                           ),
                         ),
-                        _statusChip(_label(status), color, icon),
-                      ]),
-
-                      const SizedBox(height: 10),
-
-                      // ── Service name + Total ───────────────────────
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              svc,
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 2,
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: _dark ? Colors.white : AppColors.dark,
-                                height: 1.3,
+                        const SizedBox(width: 10),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 5),
+                              decoration: BoxDecoration(
+                                gradient: AppColors.gradient,
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: AppColors.glowShadow,
+                              ),
+                              child: Text(
+                                "₹$total",
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 10),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 5),
-                                decoration: BoxDecoration(
-                                  gradient: AppColors.gradient,
-                                  borderRadius: BorderRadius.circular(20),
-                                  boxShadow: AppColors.glowShadow,
-                                ),
-                                child: Text(
-                                  "₹$total",
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13,
-                                  ),
+                            if (hasCharge) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                "incl. ₹$svcCharge charge",
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.warning,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              if (hasCharge) ...[
-                                const SizedBox(height: 3),
-                                Text(
-                                  "incl. ₹$svcCharge charge",
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: AppColors.warning,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
                             ],
+                          ],
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // ── Category badge ────────────────────────────
+                    if (category.isNotEmpty) ...[
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: AppColors.primary.withOpacity(0.18),
+                            width: 1,
                           ),
-                        ],
+                        ),
+                        child: Text(
+                          category,
+                          style: const TextStyle(
+                            color: AppColors.primary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
+                    ],
 
-                      const SizedBox(height: 8),
+                    // ── Date + Slot ───────────────────────────────
+                    _infoRow(Icons.calendar_today_rounded, date),
+                    const SizedBox(height: 5),
+                    _infoRow(Icons.access_time_rounded, slot),
 
-                      // ── Category badge ────────────────────────────
-                      if (category.isNotEmpty) ...[
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(
-                              color: AppColors.primary.withOpacity(0.18),
-                              width: 1,
+                    const SizedBox(height: 12),
+
+                    Divider(
+                      height: 1,
+                      thickness: 0.8,
+                      color: _dark ? Colors.white10 : AppColors.border,
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    // ── Payment + View Details ────────────────────
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(children: [
+                          Icon(Icons.payment_rounded,
+                              size: 14,
+                              color: _dark
+                                  ? Colors.white38
+                                  : AppColors.muted),
+                          const SizedBox(width: 5),
+                          Text(
+                            payment,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _dark
+                                  ? Colors.white54
+                                  : AppColors.muted,
                             ),
                           ),
-                          child: Text(
-                            category,
-                            style: const TextStyle(
+                        ]),
+                        const Row(children: [
+                          Icon(Icons.touch_app_rounded,
+                              size: 14, color: AppColors.primary),
+                          SizedBox(width: 4),
+                          Text(
+                            "View Details",
+                            style: TextStyle(
+                              fontSize: 12,
                               color: AppColors.primary,
-                              fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ),
+                        ]),
                       ],
-
-                      // ── Date + Slot ───────────────────────────────
-                      _infoRow(Icons.calendar_today_rounded, date),
-                      const SizedBox(height: 5),
-                      _infoRow(Icons.access_time_rounded, slot),
-
-                      const SizedBox(height: 12),
-
-                      Divider(
-                        height: 1,
-                        thickness: 0.8,
-                        color: _dark ? Colors.white10 : AppColors.border,
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      // ── Payment + View Details ────────────────────
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(children: [
-                            Icon(Icons.payment_rounded,
-                                size: 14,
-                                color: _dark
-                                    ? Colors.white38
-                                    : AppColors.muted),
-                            const SizedBox(width: 5),
-                            Text(
-                              payment,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: _dark
-                                    ? Colors.white54
-                                    : AppColors.muted,
-                              ),
-                            ),
-                          ]),
-                          const Row(children: [
-                            Icon(Icons.touch_app_rounded,
-                                size: 14, color: AppColors.primary),
-                            SizedBox(width: 4),
-                            Text(
-                              "View Details",
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ]),
-                        ],
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -639,7 +636,7 @@ class _OrdersScreenState extends State<OrdersScreen>
     ),
   );
 
-  // ── Empty State ───────────────────────────────────────────────────────
+  // ── Empty State (Updated for Active Bookings) ─────────────────────────
 
   Widget _emptyState() => Center(
     child: Padding(
@@ -666,7 +663,7 @@ class _OrdersScreenState extends State<OrdersScreen>
           ),
           const SizedBox(height: 22),
           Text(
-            "No Bookings Found",
+            "No Active Bookings Available",
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -676,7 +673,7 @@ class _OrdersScreenState extends State<OrdersScreen>
           const SizedBox(height: 8),
           Text(
             _filter == "All"
-                ? "Book a service to get started."
+                ? "You currently have no active bookings.\nBook a service to get started."
                 : "No ${_label(_filter)} bookings.",
             textAlign: TextAlign.center,
             style: TextStyle(

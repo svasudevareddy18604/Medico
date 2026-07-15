@@ -471,6 +471,142 @@ router.post("/:orderId/cancel", async (req, res) => {
 });
 
 /* =====================================================
+   GET /orders/:orderId/available-slots?date=YYYY-MM-DD
+===================================================== */
+
+router.get("/:orderId/available-slots", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { date } = req.query;
+
+    if (!date)
+      return res.status(400).json({ success: false, message: "Date is required" });
+
+    const [[order]] = await db.query(
+      `SELECT id, category, status FROM orders WHERE id = ?`,
+      [orderId]
+    );
+
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found" });
+
+    if (order.status !== "CONFIRMED")
+      return res.status(400).json({
+        success: false,
+        message: "This booking can no longer be rescheduled.",
+      });
+
+    // Slots already taken by OTHER active bookings in the same category/date
+    // (mirrors your admin-lock caretaker availability logic — prevents
+    // overbooking a slot that has no free caretaker in that category).
+    const [rows] = await db.query(
+      `SELECT slot FROM orders
+       WHERE date = ?
+         AND category = ?
+         AND id != ?
+         AND status NOT IN ('CANCELLED')`,
+      [date, order.category, orderId]
+    );
+
+    const booked_slots = rows.map((r) => r.slot);
+
+    return res.json({ success: true, booked_slots });
+  } catch (err) {
+    console.error("AVAILABLE SLOTS ERROR:", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch slots" });
+  }
+});
+
+/* =====================================================
+   POST /orders/:orderId/reschedule
+===================================================== */
+
+const MAX_RESCHEDULES = 3; // tweak/remove as you like
+
+router.post("/:orderId/reschedule", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { date, slot } = req.body;
+
+    if (!date || !slot)
+      return res.status(400).json({ success: false, message: "Date and slot are required" });
+
+    const [[order]] = await db.query(
+      `SELECT * FROM orders WHERE id = ?`,
+      [orderId]
+    );
+
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found" });
+
+    // ── Server-side guard: only CONFIRMED (pre-acceptance) bookings ────
+    // matches the Flutter-side `_reschedulable` check, never trust client.
+    if (order.status !== "CONFIRMED")
+      return res.status(400).json({
+        success: false,
+        message: "Booking can't be rescheduled — a caretaker has already accepted it. Please contact support.",
+      });
+
+    if (order.reschedule_count >= MAX_RESCHEDULES)
+      return res.status(400).json({
+        success: false,
+        message: `This booking has already been rescheduled ${MAX_RESCHEDULES} times. Please contact support for further changes.`,
+      });
+
+    // ── Validate slot isn't in the past ─────────────────────────────────
+    const slotDt = new Date(`${date}T${slot}:00`);
+    if (isNaN(slotDt.getTime()) || slotDt <= new Date())
+      return res.status(400).json({ success: false, message: "Selected slot is invalid or in the past." });
+
+    // ── Re-validate slot availability server-side (never trust client) ──
+    const [conflicts] = await db.query(
+      `SELECT id FROM orders
+       WHERE date = ?
+         AND slot = ?
+         AND category = ?
+         AND id != ?
+         AND status NOT IN ('CANCELLED')`,
+      [date, slot, order.category, orderId]
+    );
+    if (conflicts.length > 0)
+      return res.status(400).json({
+        success: false,
+        message: "That slot was just taken. Please pick another.",
+      });
+
+    // ── Preserve the very first original date/slot for audit trail ──────
+    const isFirstReschedule = order.reschedule_count === 0;
+
+    await db.query(
+      `UPDATE orders
+       SET date = ?,
+           slot = ?,
+           reschedule_count = reschedule_count + 1,
+           last_rescheduled_at = NOW(),
+           original_date = ${isFirstReschedule ? "?" : "original_date"},
+           original_slot = ${isFirstReschedule ? "?" : "original_slot"}
+       WHERE id = ?`,
+      isFirstReschedule
+        ? [date, slot, order.date, order.slot, orderId]
+        : [date, slot, orderId]
+    );
+
+    return res.json({
+      success: true,
+      message: "Booking rescheduled successfully",
+      order: { id: orderId, date, slot },
+    });
+
+    // Optional: notify user/admin of the reschedule via email — wire this
+    // up to notificationEmail.service.js the same way cancellation does,
+    // once you add a sendRescheduleNotification() export there.
+  } catch (err) {
+    console.error("RESCHEDULE ERROR:", err);
+    return res.status(500).json({ success: false, message: "Reschedule failed" });
+  }
+});
+
+/* =====================================================
    GET /orders/admin/refunds
 ===================================================== */
 

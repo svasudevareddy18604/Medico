@@ -11,6 +11,7 @@ import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
 import '../../widgets/verified_badge.dart';
+import '../../widgets/cart/reschedule_bottom_sheet.dart'; // ✅ NEW
 import 'careseekerfeedback_screen.dart';
 import 'cancellationpolicy_screen.dart';
 import 'caretaker_live_tracking_screen.dart';
@@ -41,6 +42,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
   static const Color _totalGreen = Color(0xFF16A34A);
 
+  // ✅ NEW — support contact number shown when reschedule needs support.
+  // Replace with your real support number / helpline.
+  static const String _supportPhone = "+911234567890";
+
   bool get _dark => themeNotifier.value == ThemeMode.dark;
 
   Color get _surface => _dark ? const Color(0xFF1E293B) : AppColors.cardBg;
@@ -55,6 +60,13 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
   bool   get _cancelled  => _status == "CANCELLED";
   bool   get _completed  => _status == "COMPLETED";
   bool   get _cancellable => ["CONFIRMED", "ACCEPTED"].contains(_status);
+
+  // ✅ NEW — reschedule is only allowed BEFORE a caretaker accepts.
+  bool get _reschedulable => _status == "CONFIRMED";
+
+  // ✅ NEW — once accepted (or later), reschedule needs support instead.
+  bool get _rescheduleNeedsSupport =>
+      ["ACCEPTED", "ON_THE_WAY"].contains(_status);
 
   String get _cancelledBy      => (_order["cancelled_by"] ?? "").toString().trim().toLowerCase();
   bool   get _cancelledByAdmin => _cancelledBy == "admin";
@@ -294,6 +306,32 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     ),
   );
 
+  // ✅ NEW — opens the reschedule bottom sheet (only reachable when
+  // _reschedulable is true — see _bookingActionsSection()).
+  void _showRescheduleSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => RescheduleBottomSheet(
+        orderId: _order["id"] as int,
+        currentDate: _order["date"]?.toString() ?? "",
+        currentSlot: _order["slot"]?.toString() ?? "",
+        onRescheduled: () => _refresh(),
+      ),
+    );
+  }
+
+  // ✅ NEW — called from the "Contact Support" note once caretaker accepted.
+  Future<void> _contactSupport() async {
+    final uri = Uri.parse("tel:$_supportPhone");
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else if (mounted) {
+      _snack("Could not open dialer. Call us at $_supportPhone", AppColors.danger);
+    }
+  }
+
   // ── Build ──────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -360,9 +398,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                       ),
 
                       const SizedBox(height: 22),
-                      if (_cancellable) _cancelBtn(),
-                      if (!_cancellable && !_completed && !_cancelled)
-                        _blockedCancelNote(),
+
+                      // ✅ NEW — replaces the old bare cancel/blocked block
+                      _bookingActionsSection(),
+
                       if (_completed && _order["caretaker_id"] != null) ...[
                         const SizedBox(height: 10),
                         (_feedbackAlreadyGiven || _feedbackGiven) ? _feedbackGivenBadge() : _feedbackBtn(),
@@ -732,7 +771,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     });
   }
 
-  // ── Service OTP card — copy option removed ─────────────────────────
   // ── Service OTP card — distinct teal theme ─────────────────────────
   static const Color _otpStart = Color(0xFF0EA5A5); // teal
   static const Color _otpEnd   = Color(0xFF0B7A87); // deep teal
@@ -1405,7 +1443,103 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
         (_order["slot"] ?? "-").toString()),
   ]));
 
-  // ── Action Buttons ───────────────────────────────────────────────
+  // ── Booking Actions Section (cancel / reschedule) ────────────────
+  // ✅ NEW — replaces the old bare `if (_cancellable) _cancelBtn()` block.
+  //
+  //   CONFIRMED (no caretaker yet)  → Reschedule + Cancel
+  //   ACCEPTED / ON_THE_WAY          → Cancel (if allowed) + "contact
+  //                                     support to reschedule" note
+  //   otherwise                     → nothing (completed/cancelled)
+  Widget _bookingActionsSection() {
+    if (_completed || _cancelled) return const SizedBox.shrink();
+
+    final children = <Widget>[];
+
+    if (_reschedulable) {
+      children.add(_rescheduleBtn());
+      children.add(const SizedBox(height: 12));
+      children.add(_cancelBtn());
+    } else {
+      if (_cancellable) {
+        children.add(_cancelBtn());
+      } else {
+        children.add(_blockedCancelNote());
+      }
+      if (_rescheduleNeedsSupport) {
+        children.add(const SizedBox(height: 12));
+        children.add(_contactSupportRescheduleNote());
+      }
+    }
+
+    return Column(children: children);
+  }
+
+  // ✅ NEW
+  Widget _rescheduleBtn() => DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: AppColors.gradient,
+      borderRadius: BorderRadius.circular(15),
+      boxShadow: AppColors.glowShadow,
+    ),
+    child: ElevatedButton.icon(
+      onPressed: _showRescheduleSheet,
+      icon: const Icon(Icons.event_repeat_rounded, size: 18, color: Colors.white),
+      label: const Text("Reschedule Booking",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        elevation: 0,
+        minimumSize: const Size(double.infinity, 50),
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      ),
+    ),
+  );
+
+  // ✅ NEW
+  Widget _contactSupportRescheduleNote() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+    decoration: BoxDecoration(
+      color: AppColors.primary.withOpacity(0.07),
+      borderRadius: BorderRadius.circular(15),
+      border: Border.all(color: AppColors.primary.withOpacity(0.22)),
+    ),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(Icons.support_agent_rounded, color: AppColors.primary, size: 20),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text("Need to reschedule?",
+              style: TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 3),
+          Text(
+            "Your caretaker has already accepted this booking, so it can't be "
+            "rescheduled in the app. Please contact our support team and "
+            "we'll help you move it to a new time.",
+            style: TextStyle(
+                color: AppColors.primary.withOpacity(0.85),
+                fontSize: 11.5, height: 1.4, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 10),
+          GestureDetector(
+            onTap: _contactSupport,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.call_rounded, size: 14, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text("Contact Support",
+                  style: TextStyle(
+                      color: AppColors.primary, fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      decoration: TextDecoration.underline)),
+            ]),
+          ),
+        ]),
+      ),
+    ]),
+  );
+
   Widget _cancelBtn() => SizedBox(
     width: double.infinity,
     child: OutlinedButton.icon(

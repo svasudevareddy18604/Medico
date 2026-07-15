@@ -35,6 +35,8 @@ class Api {
   static const String completeOrder       = "$baseUrl/caretaker/payment/complete";
   static String caretakerPaymentDetails(int orderId) => "$baseUrl/caretaker/payment/$orderId";
 
+  
+
 /* ================= INVOICE ================= */
   static String getInvoice(int orderId) => "$baseUrl/invoice/order/$orderId";
 
@@ -91,6 +93,11 @@ class Api {
   static const String userOrders = "$baseUrl/orders/user";
   static String orderDetails(int orderId) => "$baseUrl/careseeker/order/$orderId";
   static String cancelOrder(int orderId)  => "$baseUrl/orders/$orderId/cancel";
+
+   /* ================= RESCHEDULE ORDERS ================= */
+
+  static String getAvailableSlots(int orderId) => "$baseUrl/orders/$orderId/available-slots";
+  static String rescheduleOrder(int orderId)   => "$baseUrl/orders/$orderId/reschedule";
 
   /* ================= PAYMENTS ================= */
 

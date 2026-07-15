@@ -171,10 +171,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
         border: Border.all(color: Colors.white.withOpacity(0.25)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
                   "TODAY'S EARNINGS",
@@ -192,7 +194,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         "₹${todayRevenue.toStringAsFixed(0)}",
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 28,
+                          fontSize: 26,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
@@ -208,12 +210,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         size: 16,
                       ),
                       const SizedBox(width: 4),
-                      Text(
-                        "${trendPct.toStringAsFixed(0)}% vs yesterday",
-                        style: TextStyle(
-                          color: trendUp ? Colors.greenAccent : Colors.orangeAccent,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                      Flexible(
+                        child: Text(
+                          "${trendPct.toStringAsFixed(0)}% vs yesterday",
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: trendUp ? Colors.greenAccent : Colors.orangeAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ],
@@ -231,6 +236,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
                   "TODAY'S BOOKINGS",
@@ -248,7 +254,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         "${_today['today_bookings'] ?? 0}",
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 28,
+                          fontSize: 26,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
@@ -256,6 +262,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   const SizedBox(height: 6),
                   Text(
                     "${_today['completed_count'] ?? 0} completed · ${_today['cancelled_count'] ?? 0} cancelled",
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 11,
@@ -313,7 +321,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     ];
 
     return SizedBox(
-      height: 104,
+      height: 132,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: cards.length,
@@ -326,7 +334,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   Widget _statCard(_StatCardData data) {
     return Container(
       width: 148,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -340,33 +348,39 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
               color: data.color.withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: Icon(data.icon, size: 18, color: data.color),
+            child: Icon(data.icon, size: 16, color: data.color),
           ),
-          const Spacer(),
           _loading
               ? _shimmerLine(width: 50, height: 16)
-              : Text(
-                  data.value,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.grey[850] ?? Colors.grey[900],
+              : FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    data.value,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.grey[850] ?? Colors.grey[900],
+                    ),
                   ),
                 ),
-          const SizedBox(height: 2),
           Text(
             data.label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w500,
               color: Colors.grey[600],
+              height: 1.2,
             ),
           ),
         ],
@@ -520,6 +534,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [

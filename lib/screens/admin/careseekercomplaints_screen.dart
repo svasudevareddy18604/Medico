@@ -145,7 +145,7 @@ class AdminComplaint {
   }
 }
 
-const List<String> _kFilterTabs = ["All", "Pending", "In Progress", "Resolved", "Rejected"];
+const List<String> _kFilterTabs = ["All", "Pending", "Progress", "Resolved", "Rejected"];
 
 /// ── Screen ──────────────────────────────────────────────────────────────
 class AdminComplaintsScreen extends StatefulWidget {
@@ -288,42 +288,55 @@ class _AdminComplaintsScreenState extends State<AdminComplaintsScreen> {
 
   /* ================= FILTER TABS ================= */
 
-  Widget _filterTabs(bool isDark) => SizedBox(
-        height: 44,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          itemCount: _kFilterTabs.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (_, i) {
+  /* ================= FILTER TABS ================= */
+
+  Widget _filterTabs(bool isDark) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+        child: Row(
+          children: List.generate(_kFilterTabs.length, (i) {
             final tab = _kFilterTabs[i];
             final active = _activeFilter == tab;
-            return GestureDetector(
-              onTap: () => setState(() => _activeFilter = tab),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                decoration: BoxDecoration(
-                  gradient: active ? AppColors.gradient : null,
-                  color: active
-                      ? null
-                      : (isDark ? const Color(0xFF1C1C1E) : AppColors.cardBg),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: active
-                          ? Colors.transparent
-                          : (isDark ? Colors.white12 : AppColors.border)),
+            return Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  right: i == _kFilterTabs.length - 1 ? 0 : 6,
                 ),
-                child: Text(tab,
-                    style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: active
-                            ? Colors.white
-                            : (isDark ? Colors.white70 : Colors.black87))),
+                child: GestureDetector(
+                  onTap: () => setState(() => _activeFilter = tab),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
+                    decoration: BoxDecoration(
+                      gradient: active ? AppColors.gradient : null,
+                      color: active
+                          ? null
+                          : (isDark ? const Color(0xFF1C1C1E) : AppColors.cardBg),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: active
+                              ? Colors.transparent
+                              : (isDark ? Colors.white12 : AppColors.border)),
+                    ),
+                    child: Center(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          tab,
+                          maxLines: 1,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: active
+                                  ? Colors.white
+                                  : (isDark ? Colors.white70 : Colors.black87)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             );
-          },
+          }),
         ),
       );
 
