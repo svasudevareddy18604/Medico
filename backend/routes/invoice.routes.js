@@ -26,15 +26,6 @@ const displayPaymentMethod = (m) => {
   }
 };
 
-const displayPaymentStatus = (s) => {
-  switch ((s || "").toUpperCase()) {
-    case "PAID": return "Paid";
-    case "PENDING": return "Pending";
-    case "FAILED": return "Failed";
-    case "REFUNDED": return "Refunded";
-    default: return s || "-";
-  }
-};
 
 function formatInvoiceRow(row) {
   return {

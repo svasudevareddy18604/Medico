@@ -156,12 +156,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         MaterialPageRoute(builder: (_) => const AdminComplaintsScreen())),
                   ),
                   DashboardCard(
-                    title: "Invoices",
-                    icon: Icons.report_problem_rounded,
-                    color: const Color(0xFFD84315),
-                    onTap: () => Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => const AdminInvoicesScreen())),
-                  ),
+  title: "Invoices",
+  icon: Icons.receipt_long_rounded,
+  color: const Color(0xFFD84315),
+  onTap: () => Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const AdminInvoicesScreen(),
+    ),
+  ),
+),
 
                 ],
               ),
