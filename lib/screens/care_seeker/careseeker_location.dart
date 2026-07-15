@@ -223,6 +223,7 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
         await prefs.remove("user_location_${widget.userId}");
         await prefs.remove("user_lat_${widget.userId}");
         await prefs.remove("user_lng_${widget.userId}");
+        await prefs.setBool("address_deleted_${widget.userId}", true); // ✅ mark as an explicit delete
         _deletedActiveAddress = true;
         if (mounted) setState(() => _selectedAddressId = null);
 
@@ -273,6 +274,7 @@ class _CareSeekerLocationState extends State<CareSeekerLocation> {
       await prefs.setString("user_location_${widget.userId}", "${a["address_line"]}, ${a["area"]}");
       await prefs.setDouble("user_lat_${widget.userId}", double.tryParse(a["latitude"].toString()) ?? 0.0);
       await prefs.setDouble("user_lng_${widget.userId}", double.tryParse(a["longitude"].toString()) ?? 0.0);
+      await prefs.setBool("address_deleted_${widget.userId}", false); // ✅ a real address is active again
 
       _deletedActiveAddress = false;
       if (!mounted) return;

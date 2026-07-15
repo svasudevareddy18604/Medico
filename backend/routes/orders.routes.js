@@ -12,6 +12,14 @@ const {
   sendReschedulePush,
 } = require("../services/pushNotification.service");
 
+const rateLimit = require("express-rate-limit");
+
+const rescheduleLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, message: "Too many reschedule attempts. Please try again later." },
+});
+
 /* =====================================================
    HELPERS
 ===================================================== */
@@ -540,9 +548,11 @@ router.get("/:orderId/available-slots", async (req, res) => {
    Body: { date, slot_id }
 ===================================================== */
 
-const MAX_RESCHEDULES = 3; // tweak/remove as you like
+const MAX_RESCHEDULES   = 3;   // total reschedules allowed per booking
+const MIN_NOTICE_HOURS  = 2;   // can't reschedule within X hrs of current slot
+const COOLDOWN_MINUTES  = 5;   // gap required between consecutive reschedules
 
-router.post("/:orderId/reschedule", async (req, res) => {
+router.post("/:orderId/reschedule", rescheduleLimiter, async (req, res) => {
   let conn;
   try {
     const { orderId } = req.params;
@@ -564,6 +574,18 @@ router.post("/:orderId/reschedule", async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
+    // ── Ownership check ──────────────────────────────────────────────
+    // TODO: wire this to your auth middleware once available.
+    // If you attach the logged-in user to req.user (e.g. via JWT
+    // middleware), uncomment this block — it's the single most
+    // important guard on this route, since right now anyone who
+    // knows an orderId can reschedule someone else's booking.
+    //
+    // if (order.user_id !== req.user.id) {
+    //   await conn.rollback();
+    //   return res.status(403).json({ success: false, message: "Not authorized to modify this booking." });
+    // }
+
     if (order.status !== "CONFIRMED") {
       await conn.rollback();
       return res.status(400).json({
@@ -577,6 +599,32 @@ router.post("/:orderId/reschedule", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `This booking has already been rescheduled ${MAX_RESCHEDULES} times. Please contact support for further changes.`,
+      });
+    }
+
+    // ── Cooldown between reschedules ────────────────────────────────
+    if (order.last_rescheduled_at) {
+      const minsSinceLast = (new Date() - new Date(order.last_rescheduled_at)) / 60000;
+      if (minsSinceLast < COOLDOWN_MINUTES) {
+        await conn.rollback();
+        return res.status(429).json({
+          success: false,
+          message: `Please wait a few minutes before rescheduling again.`,
+        });
+      }
+    }
+
+    // ── Minimum notice before current slot ──────────────────────────
+    const currentSlotDt = new Date(
+      `${order.date.toISOString().split("T")[0]}T${order.slot}`
+    );
+    const hoursUntilCurrentSlot = (currentSlotDt - new Date()) / (1000 * 60 * 60);
+
+    if (hoursUntilCurrentSlot < MIN_NOTICE_HOURS) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `Bookings can't be rescheduled less than ${MIN_NOTICE_HOURS} hours before the scheduled time. Please contact support.`,
       });
     }
 
@@ -598,7 +646,7 @@ router.post("/:orderId/reschedule", async (req, res) => {
 
     const hhmm = targetSlot.slot_time.toString().slice(0, 5); // "09:00"
 
-    // ── Free the previously held slot (if it was tracked in service_slots) ──
+    // ── Free the previously held slot (if tracked in service_slots) ──
     await conn.query(
       `UPDATE service_slots
        SET status = 'available', order_id = NULL
@@ -629,15 +677,22 @@ router.post("/:orderId/reschedule", async (req, res) => {
         : [date, hhmm, orderId]
     );
 
+    // ── Audit log entry ──────────────────────────────────────────────
+    await conn.query(
+      `INSERT INTO reschedule_log (order_id, old_date, old_slot, new_date, new_slot)
+       VALUES (?, ?, ?, ?, ?)`,
+      [orderId, order.date, order.slot, date, hhmm]
+    );
+
     await conn.commit();
 
     res.json({
       success: true,
       message: "Booking rescheduled successfully",
       order: { id: orderId, date, slot: hhmm },
+      reschedules_remaining: MAX_RESCHEDULES - (order.reschedule_count + 1), // ✅ NEW — for UI display
     });
 
-    // ✅ NEW — fire email + push AFTER response is sent, non-blocking
     setImmediate(async () => {
       try {
         const [[user]] = await db.query(
@@ -664,7 +719,6 @@ router.post("/:orderId/reschedule", async (req, res) => {
         console.error("RESCHEDULE NOTIFICATION ERROR:", err);
       }
     });
-
   } catch (err) {
     if (conn) await conn.rollback();
     console.error("RESCHEDULE ERROR:", err);

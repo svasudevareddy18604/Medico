@@ -72,21 +72,68 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
   Future<void> _loadData() async =>
       Future.wait([_loadLocation(), _loadCartCount(), _loadProfile(), _fetchPromotions()]);
 
+  // ---------------------------------------------------------------------
+  // ADDRESS LOADING LOGIC
+  //
+  // Key used to persist the last known address locally:
+  //   "user_location_<userId>"
+  //
+  // Key used to track an EXPLICIT delete from the location screen:
+  //   "address_deleted_<userId>"
+  //
+  // Rule: if the server call returns an empty address, we only clear the
+  // cached address (and show "Add Address") when the user has explicitly
+  // deleted it from CareSeekerLocation. If that flag isn't set (e.g. right
+  // after a fresh login where the server call is empty/slow/fails), we keep
+  // showing the last cached address instead of wiping it.
+  //
+  // IMPORTANT: In careseeker_location.dart, wherever you currently delete
+  // the address (your deleteAddress() function), add:
+  //
+  //   final prefs = await SharedPreferences.getInstance();
+  //   await prefs.setBool("address_deleted_${widget.userId}", true);
+  //
+  // And wherever the user successfully SETS/ADDS a new address, add:
+  //
+  //   final prefs = await SharedPreferences.getInstance();
+  //   await prefs.setBool("address_deleted_${widget.userId}", false);
+  //
+  // so a future delete is tracked correctly again.
+  // ---------------------------------------------------------------------
   Future<void> _loadLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = "user_location_${widget.userId}";
+    final deletedKey = "address_deleted_${widget.userId}";
+
     try {
       final res = await http.get(Uri.parse("${Api.baseUrl}/user/address/${widget.userId}"));
       if (res.statusCode == 200) {
         final addr = (jsonDecode(res.body)["address"] ?? "").toString().trim();
-        final prefs = await SharedPreferences.getInstance();
-        addr.isEmpty
-            ? await prefs.remove("user_location_${widget.userId}")
-            : await prefs.setString("user_location_${widget.userId}", addr);
-        if (mounted) setState(() => location = addr.isEmpty ? "Add Address" : addr);
-        return;
+
+        if (addr.isNotEmpty) {
+          // Server has a real address — cache it and reset the deleted flag.
+          await prefs.setString(key, addr);
+          await prefs.setBool(deletedKey, false);
+          if (mounted) setState(() => location = addr);
+          return;
+        }
+
+        // Server returned no address. Only wipe the cache if the user
+        // actually deleted it from the location screen.
+        final wasDeleted = prefs.getBool(deletedKey) ?? false;
+        if (wasDeleted) {
+          await prefs.remove(key);
+          if (mounted) setState(() => location = "Add Address");
+          return;
+        }
+        // else: fall through and use whatever is cached locally, so
+        // logging out/in doesn't make a saved address disappear.
       }
-    } catch (_) {}
-    final saved = (await SharedPreferences.getInstance())
-            .getString("user_location_${widget.userId}") ?? "";
+    } catch (_) {
+      // network/error — fall through to cached value below
+    }
+
+    final saved = prefs.getString(key) ?? "";
     if (mounted) setState(() => location = saved.isEmpty ? "Add Address" : saved);
   }
 
@@ -194,10 +241,10 @@ class _CareSeekerHomeState extends State<CareSeekerHome> with WidgetsBindingObse
           onTap: () async {
             await Navigator.push(context,
                 MaterialPageRoute(builder: (_) => CareSeekerLocation(userId: widget.userId)));
-            // ✅ This already re-fetches the active address from the server
-            // every time you return from the address screen — so once
-            // deleteAddress() clears the stale selection, this call is what
-            // makes Home show "Add Address" within seconds of coming back.
+            // Re-fetch the active address whenever we return from the
+            // location screen. If the address was explicitly deleted there,
+            // _loadLocation() will now correctly show "Add Address". If it
+            // wasn't deleted, the cached address is preserved.
             await _loadLocation();
             _cartKey.currentState?.refresh();
           },
