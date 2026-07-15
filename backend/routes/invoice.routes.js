@@ -26,6 +26,15 @@ const displayPaymentMethod = (m) => {
   }
 };
 
+const displayPaymentStatus = (s) => {
+  switch ((s || "").toUpperCase()) {
+    case "PAID": return "Paid";
+    case "PENDING": return "Pending";
+    case "FAILED": return "Failed";
+    case "REFUNDED": return "Refunded";
+    default: return s || "-";
+  }
+};
 
 function formatInvoiceRow(row) {
   return {
@@ -46,6 +55,10 @@ function formatInvoiceRow(row) {
   };
 }
 
+/* =====================================================
+   GET /api/invoice/order/:orderId
+   Careseeker: fetch (or lazily generate) invoice for one order.
+===================================================== */
 router.get("/order/:orderId", async (req, res) => {
   const { orderId } = req.params;
   try {
@@ -134,17 +147,6 @@ router.get("/order/:orderId", async (req, res) => {
     return res.status(500).json({ success: false, message: "Failed to load invoice" });
   }
 });
-
-// update displayPaymentStatus case block:
-const displayPaymentStatus = (s) => {
-  switch ((s || "").toUpperCase()) {
-    case "PAID": return "Paid";
-    case "PENDING": return "Pending";
-    case "FAILED": return "Failed";
-    case "REFUNDED": return "Refunded";
-    default: return s || "-";
-  }
-};
 
 /* =====================================================
    GET /api/invoice/admin/all
