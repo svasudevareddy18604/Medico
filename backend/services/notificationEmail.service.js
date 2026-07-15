@@ -680,24 +680,27 @@ const sendCancellationNotifications = async (orderIdOrOrder, maybeReason) => {
     if (careseeker?.fcm_token) {
       await sendPushNotification(
         careseeker.fcm_token,
-        "❌ Booking Cancelled",
-        `${order.order_code} has been cancelled`
+        "❌ Booking Cancelled by Medico",
+        `${order.order_code} has been cancelled by the Medico team`
       );
     }
 
     if (careseeker?.email) {
       await sendEmail({
         to: careseeker.email,
-        subject: `❌ Booking Cancelled - ${order.order_code}`,
+        subject: `❌ Booking Cancelled by Medico - ${order.order_code}`,
         html: emailTemplate({
           title: "Booking Cancelled",
-          subtitle: "Your booking has been cancelled",
+          subtitle: "Your booking has been cancelled by the Medico team",
           statusColor: "#dc2626",
           content: `
             <p>Hello <b>${careseeker.first_name}</b>,</p>
             <p>
-              Your booking has been cancelled${reason ? ` — <b>Reason:</b> ${reason}` : ""}.
+              Your booking <b>${order.order_code}</b> has been cancelled
+              by the <b>Medico team</b>${reason ? ` — <b>Reason:</b> ${reason}` : ""}.
             </p>
+            <p>If you paid online, please check the app for refund eligibility and status.
+               We apologise for the inconvenience.</p>
             ${orderTable({ orderCode: order.order_code })}
           `
         })
@@ -708,24 +711,24 @@ const sendCancellationNotifications = async (orderIdOrOrder, maybeReason) => {
     if (caretaker?.fcm_token) {
       await sendPushNotification(
         caretaker.fcm_token,
-        "❌ Booking Cancelled",
-        `${order.order_code} has been cancelled by admin`
+        "❌ Booking Cancelled by Medico",
+        `${order.order_code} has been cancelled by the Medico team`
       );
     }
 
     if (caretaker?.email) {
       await sendEmail({
         to: caretaker.email,
-        subject: `❌ Booking Cancelled - ${order.order_code}`,
+        subject: `❌ Booking Cancelled by Medico - ${order.order_code}`,
         html: emailTemplate({
           title: "Booking Cancelled",
-          subtitle: "A booking assigned to you has been cancelled",
+          subtitle: "A booking assigned to you has been cancelled by the Medico team",
           statusColor: "#dc2626",
           content: `
             <p>Hello <b>${caretaker.first_name}</b>,</p>
             <p>
               The booking <b>${order.order_code}</b> that was assigned to
-              you has been cancelled${reason ? ` — <b>Reason:</b> ${reason}` : ""}.
+              you has been cancelled by the <b>Medico team</b>${reason ? ` — <b>Reason:</b> ${reason}` : ""}.
               You no longer need to attend this appointment.
             </p>
             ${orderTable({ orderCode: order.order_code })}
@@ -766,12 +769,12 @@ const sendRescheduleConfirmation = async ({ user, order, newDate, newSlot, oldDa
     if (!person?.email) {
       console.warn(`⚠️ Skipping reschedule email — no email on file for ${isCaretaker ? "caretaker" : "user"} ${person?.id || "unknown"}`);
     } else {
-      const subject = `Booking Rescheduled — ${orderCode}`;
+      const subject = `Booking Rescheduled by Medico — ${orderCode}`;
       const html = `
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-          <h2 style="color:#0f766e;">${isCaretaker ? "A booking you're assigned to has been rescheduled" : "Your booking has been rescheduled"}</h2>
+          <h2 style="color:#0f766e;">${isCaretaker ? "A booking you're assigned to has been rescheduled by the Medico team" : "Your booking has been rescheduled by the Medico team"}</h2>
           <p>Hi ${person.first_name || "there"},</p>
-          <p>${isCaretaker ? "The" : "Your"} Medico booking <strong>${orderCode}</strong> has been moved to a new date and time.</p>
+          <p>${isCaretaker ? "The" : "Your"} Medico booking <strong>${orderCode}</strong> has been rescheduled by the <strong>Medico team</strong> to a new date and time.</p>
 
           <table style="width:100%; border-collapse:collapse; margin:16px 0;">
             <tr>
@@ -804,8 +807,8 @@ const sendRescheduleConfirmation = async ({ user, order, newDate, newSlot, oldDa
     if (person?.fcm_token) {
       await sendPushNotification(
         person.fcm_token,
-        "📅 Booking Rescheduled",
-        `${orderCode} moved to ${fmtDate(newDate)}, ${newSlot}`
+        "📅 Booking Rescheduled by Medico",
+        `${orderCode} rescheduled by the Medico team to ${fmtDate(newDate)}, ${newSlot}`
       );
     }
   };
