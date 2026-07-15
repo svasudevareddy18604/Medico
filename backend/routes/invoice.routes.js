@@ -143,4 +143,47 @@ router.get("/order/:orderId", async (req, res) => {
   }
 });
 
+// update displayPaymentStatus case block:
+const displayPaymentStatus = (s) => {
+  switch ((s || "").toUpperCase()) {
+    case "PAID": return "Paid";
+    case "PENDING": return "Pending";
+    case "FAILED": return "Failed";
+    case "REFUNDED": return "Refunded";
+    default: return s || "-";
+  }
+};
+
+/* =====================================================
+   GET /api/invoice/admin/all
+   Admin: list all invoices, with optional search (booking id /
+   invoice no / customer name) and payment status filter.
+===================================================== */
+router.get("/admin/all", async (req, res) => {
+  try {
+    const { search = "", status = "" } = req.query;
+    let query = `SELECT * FROM invoices WHERE 1=1`;
+    const params = [];
+
+    if (search.trim()) {
+      const like = `%${search.trim()}%`;
+      query += ` AND (invoice_no LIKE ? OR order_code LIKE ? OR customer_name LIKE ?)`;
+      params.push(like, like, like);
+    }
+
+    if (status.trim()) {
+      query += ` AND payment_status = ?`;
+      params.push(status.trim().toUpperCase());
+    }
+
+    query += ` ORDER BY created_at DESC`;
+
+    const [rows] = await db.query(query, params);
+    return res.json({ success: true, invoices: rows.map(formatInvoiceRow) });
+  } catch (err) {
+    console.error("ADMIN INVOICE LIST ERROR:", err);
+    return res.status(500).json({ success: false, message: "Failed to load invoices" });
+  }
+});
+
 module.exports = router;

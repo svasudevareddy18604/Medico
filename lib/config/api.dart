@@ -35,6 +35,9 @@ class Api {
   static const String completeOrder       = "$baseUrl/caretaker/payment/complete";
   static String caretakerPaymentDetails(int orderId) => "$baseUrl/caretaker/payment/$orderId";
 
+/* ================= INVOICE ================= */
+  static String getInvoice(int orderId) => "$baseUrl/invoice/order/$orderId";
+
 
  /* ================= COMPLAINTS ================= */
   static const String submitComplaint = "$baseUrl/complaints";

@@ -7,6 +7,7 @@ import 'orders_screen.dart';
 import '../../models/invoice_data.dart';
 import '../../services/invoice_pdf_service.dart';
 import 'invoice_screen.dart';
+import '../../services/invoice_api_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  OrderSuccessScreen
@@ -111,22 +112,36 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
   }
 
   // ── Invoice ──────────────────────────────────────────────────────────────
-  InvoiceData get _invoiceData => InvoiceData.fromOrders(
-        orderId: widget.orderId,
-        orderCode: widget.orderCode,
-        orders: widget.orders,
-        subtotal: widget.subtotal,
-        serviceCharge: widget.serviceCharge,
-        discount: widget.discount,
-        total: widget.total,
-      );
+  int get _primaryOrderId {
+  if (_orders.isNotEmpty) {
+    return int.tryParse((_orders.first["order_id"] ?? widget.orderId).toString()) ??
+        widget.orderId;
+  }
+  return widget.orderId;
+}
 
-  void _openInvoice() {
+Future<void> _openInvoice() async {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const Center(child: CircularProgressIndicator()),
+  );
+  try {
+    final invoice = await InvoiceApiService.fetchInvoice(_primaryOrderId);
+    if (!mounted) return;
+    Navigator.pop(context); // close loading dialog
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => InvoiceScreen(invoice: _invoiceData)),
+      MaterialPageRoute(builder: (_) => InvoiceScreen(invoice: invoice)),
+    );
+  } catch (_) {
+    if (!mounted) return;
+    Navigator.pop(context); // close loading dialog
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Couldn't load the invoice. Please try again.")),
     );
   }
+}
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
   @override
@@ -595,7 +610,8 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
         child: OutlinedButton.icon(
           onPressed: () async {
             try {
-              await InvoicePdfService.shareInvoice(_invoiceData);
+              final invoice = await InvoiceApiService.fetchInvoice(_primaryOrderId);
+              await InvoicePdfService.shareInvoice(invoice);
             } catch (_) {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(

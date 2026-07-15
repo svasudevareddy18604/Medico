@@ -8,6 +8,7 @@ import 'admin_caregivers.dart';
 import 'admin_timeslot_screen.dart';
 import 'admin_withdraw_screen.dart';
 import 'careseekercomplaints_screen.dart';
+import 'careseekerinvoice_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
   final int userId;
@@ -154,6 +155,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     onTap: () => Navigator.push(context,
                         MaterialPageRoute(builder: (_) => const AdminComplaintsScreen())),
                   ),
+                  DashboardCard(
+                    title: "Invoices",
+                    icon: Icons.report_problem_rounded,
+                    color: const Color(0xFFD84315),
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const AdminInvoicesScreen())),
+                  ),
+
                 ],
               ),
             ),
