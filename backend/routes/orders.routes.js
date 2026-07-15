@@ -472,6 +472,7 @@ router.post("/:orderId/cancel", async (req, res) => {
 
 /* =====================================================
    GET /orders/:orderId/available-slots?date=YYYY-MM-DD
+   Pulls from the admin-managed service_slots table.
 ===================================================== */
 
 router.get("/:orderId/available-slots", async (req, res) => {
@@ -483,7 +484,7 @@ router.get("/:orderId/available-slots", async (req, res) => {
       return res.status(400).json({ success: false, message: "Date is required" });
 
     const [[order]] = await db.query(
-      `SELECT id, category, status FROM orders WHERE id = ?`,
+      `SELECT id, status FROM orders WHERE id = ?`,
       [orderId]
     );
 
@@ -496,21 +497,32 @@ router.get("/:orderId/available-slots", async (req, res) => {
         message: "This booking can no longer be rescheduled.",
       });
 
-    // Slots already taken by OTHER active bookings in the same category/date
-    // (mirrors your admin-lock caretaker availability logic — prevents
-    // overbooking a slot that has no free caretaker in that category).
     const [rows] = await db.query(
-      `SELECT slot FROM orders
-       WHERE date = ?
-         AND category = ?
-         AND id != ?
-         AND status NOT IN ('CANCELLED')`,
-      [date, order.category, orderId]
+      `SELECT id, slot_time
+       FROM service_slots
+       WHERE slot_date = ? AND status = 'available'
+       ORDER BY slot_time ASC`,
+      [date]
     );
 
-    const booked_slots = rows.map((r) => r.slot);
+    // Filter out past times if the chosen date is today
+    const now      = new Date();
+    const isToday  = date === now.toISOString().split("T")[0];
 
-    return res.json({ success: true, booked_slots });
+    const slots = rows
+      .map((r) => {
+        const hhmm = r.slot_time.toString().slice(0, 5); // "09:00:00" -> "09:00"
+        return { id: r.id, slot_time: hhmm };
+      })
+      .filter((s) => {
+        if (!isToday) return true;
+        const [h, m] = s.slot_time.split(":").map(Number);
+        const slotDt = new Date();
+        slotDt.setHours(h, m, 0, 0);
+        return slotDt > now;
+      });
+
+    return res.json({ success: true, slots });
   } catch (err) {
     console.error("AVAILABLE SLOTS ERROR:", err);
     return res.status(500).json({ success: false, message: "Failed to fetch slots" });
@@ -519,65 +531,85 @@ router.get("/:orderId/available-slots", async (req, res) => {
 
 /* =====================================================
    POST /orders/:orderId/reschedule
+   Body: { date, slot_id }
 ===================================================== */
 
 const MAX_RESCHEDULES = 3; // tweak/remove as you like
 
 router.post("/:orderId/reschedule", async (req, res) => {
+  let conn;
   try {
     const { orderId } = req.params;
-    const { date, slot } = req.body;
+    const { date, slot_id } = req.body;
 
-    if (!date || !slot)
+    if (!date || !slot_id)
       return res.status(400).json({ success: false, message: "Date and slot are required" });
 
-    const [[order]] = await db.query(
-      `SELECT * FROM orders WHERE id = ?`,
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+
+    const [[order]] = await conn.query(
+      `SELECT * FROM orders WHERE id = ? FOR UPDATE`,
       [orderId]
     );
 
-    if (!order)
+    if (!order) {
+      await conn.rollback();
       return res.status(404).json({ success: false, message: "Order not found" });
+    }
 
-    // ── Server-side guard: only CONFIRMED (pre-acceptance) bookings ────
-    // matches the Flutter-side `_reschedulable` check, never trust client.
-    if (order.status !== "CONFIRMED")
+    if (order.status !== "CONFIRMED") {
+      await conn.rollback();
       return res.status(400).json({
         success: false,
         message: "Booking can't be rescheduled — a caretaker has already accepted it. Please contact support.",
       });
+    }
 
-    if (order.reschedule_count >= MAX_RESCHEDULES)
+    if (order.reschedule_count >= MAX_RESCHEDULES) {
+      await conn.rollback();
       return res.status(400).json({
         success: false,
         message: `This booking has already been rescheduled ${MAX_RESCHEDULES} times. Please contact support for further changes.`,
       });
+    }
 
-    // ── Validate slot isn't in the past ─────────────────────────────────
-    const slotDt = new Date(`${date}T${slot}:00`);
-    if (isNaN(slotDt.getTime()) || slotDt <= new Date())
-      return res.status(400).json({ success: false, message: "Selected slot is invalid or in the past." });
-
-    // ── Re-validate slot availability server-side (never trust client) ──
-    const [conflicts] = await db.query(
-      `SELECT id FROM orders
-       WHERE date = ?
-         AND slot = ?
-         AND category = ?
-         AND id != ?
-         AND status NOT IN ('CANCELLED')`,
-      [date, slot, order.category, orderId]
+    // ── Lock and re-validate the target slot ────────────────────────
+    const [[targetSlot]] = await conn.query(
+      `SELECT * FROM service_slots WHERE id = ? AND slot_date = ? FOR UPDATE`,
+      [slot_id, date]
     );
-    if (conflicts.length > 0)
-      return res.status(400).json({
-        success: false,
-        message: "That slot was just taken. Please pick another.",
-      });
 
-    // ── Preserve the very first original date/slot for audit trail ──────
+    if (!targetSlot) {
+      await conn.rollback();
+      return res.status(400).json({ success: false, message: "Selected slot no longer exists." });
+    }
+
+    if (targetSlot.status !== "available") {
+      await conn.rollback();
+      return res.status(400).json({ success: false, message: "That slot was just taken. Please pick another." });
+    }
+
+    const hhmm = targetSlot.slot_time.toString().slice(0, 5); // "09:00"
+
+    // ── Free the previously held slot (if it was tracked in service_slots) ──
+    await conn.query(
+      `UPDATE service_slots
+       SET status = 'available', order_id = NULL
+       WHERE order_id = ? AND status = 'booked'`,
+      [orderId]
+    );
+
+    // ── Book the new slot ────────────────────────────────────────────
+    await conn.query(
+      `UPDATE service_slots SET status = 'booked', order_id = ? WHERE id = ?`,
+      [orderId, slot_id]
+    );
+
+    // ── Update the order itself ─────────────────────────────────────
     const isFirstReschedule = order.reschedule_count === 0;
 
-    await db.query(
+    await conn.query(
       `UPDATE orders
        SET date = ?,
            slot = ?,
@@ -587,22 +619,23 @@ router.post("/:orderId/reschedule", async (req, res) => {
            original_slot = ${isFirstReschedule ? "?" : "original_slot"}
        WHERE id = ?`,
       isFirstReschedule
-        ? [date, slot, order.date, order.slot, orderId]
-        : [date, slot, orderId]
+        ? [date, hhmm, order.date, order.slot, orderId]
+        : [date, hhmm, orderId]
     );
+
+    await conn.commit();
 
     return res.json({
       success: true,
       message: "Booking rescheduled successfully",
-      order: { id: orderId, date, slot },
+      order: { id: orderId, date, slot: hhmm },
     });
-
-    // Optional: notify user/admin of the reschedule via email — wire this
-    // up to notificationEmail.service.js the same way cancellation does,
-    // once you add a sendRescheduleNotification() export there.
   } catch (err) {
+    if (conn) await conn.rollback();
     console.error("RESCHEDULE ERROR:", err);
     return res.status(500).json({ success: false, message: "Reschedule failed" });
+  } finally {
+    if (conn) conn.release();
   }
 });
 
