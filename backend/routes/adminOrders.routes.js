@@ -7,7 +7,7 @@ const {
   sendCancellationNotifications,
   sendRescheduleConfirmation,
   sendCaretakerAssignmentNotifications,
-} = require("../services/notification.service");
+} = require("../services/notificationEmail.service");
 
 /* =====================================================
    NODEMAILER
