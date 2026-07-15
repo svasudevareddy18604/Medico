@@ -17,6 +17,10 @@ class _AdminOrdersState extends State<AdminOrders> {
   bool isLoading = true;
   String selectedFilter = "ALL";
 
+  // ── SEARCH ────────────────────────────────────────────────────────────────
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = "";
+
   // ── All possible filter tabs ──────────────────────────────────────────────
   final List<String> filters = [
     "ALL",
@@ -35,6 +39,12 @@ class _AdminOrdersState extends State<AdminOrders> {
     fetchOrders();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   // ── FETCH ─────────────────────────────────────────────────────────────────
   Future<void> fetchOrders() async {
     setState(() => isLoading = true);
@@ -43,7 +53,7 @@ class _AdminOrdersState extends State<AdminOrders> {
       if (res.statusCode == 200) {
         final decoded = json.decode(res.body);
         allOrders = decoded['data'] ?? [];
-        _applyFilter(selectedFilter);
+        _applyFilters();
       }
     } catch (e) {
       debugPrint("FETCH ORDERS ERROR: $e");
@@ -51,14 +61,71 @@ class _AdminOrdersState extends State<AdminOrders> {
     setState(() => isLoading = false);
   }
 
-  // ── FILTER ────────────────────────────────────────────────────────────────
-  void _applyFilter(String filter) {
+  // ── FILTER + SEARCH (combined) ───────────────────────────────────────────
+  void _selectFilter(String filter) {
     setState(() {
       selectedFilter = filter;
-      filteredOrders = filter == "ALL"
-          ? List.from(allOrders)
-          : allOrders.where((o) => _statusOf(o) == filter).toList();
+      _applyFilters();
     });
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {
+      _searchQuery = value.trim().toLowerCase();
+      _applyFilters();
+    });
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _searchQuery = "";
+      _applyFilters();
+    });
+  }
+
+  void _applyFilters() {
+    Iterable base = selectedFilter == "ALL"
+        ? allOrders
+        : allOrders.where((o) => _statusOf(o) == selectedFilter);
+
+    if (_searchQuery.isNotEmpty) {
+      base = base.where((o) => _searchableText(o).contains(_searchQuery));
+    }
+
+    filteredOrders = base.toList();
+  }
+
+  /// Flattens every value in the order map (and nested maps/lists) into one
+  /// lowercase blob so search can match ANY field — name, id, category,
+  /// complaint/remarks/notes text, payment method, status, date, etc —
+  /// regardless of what the backend calls the field.
+  final Map<Object, String> _searchCache = {};
+  String _searchableText(Map o) {
+    final cacheKey = o['id'] ?? o;
+    if (_searchCache.containsKey(cacheKey)) return _searchCache[cacheKey]!;
+
+    final buffer = StringBuffer();
+    void collect(dynamic value) {
+      if (value == null) return;
+      if (value is Map) {
+        for (final v in value.values) {
+          collect(v);
+        }
+      } else if (value is List) {
+        for (final v in value) {
+          collect(v);
+        }
+      } else {
+        buffer.write(value.toString());
+        buffer.write(' ');
+      }
+    }
+
+    collect(o);
+    final text = buffer.toString().toLowerCase();
+    _searchCache[cacheKey] = text;
+    return text;
   }
 
   // ── STATUS HELPERS ────────────────────────────────────────────────────────
@@ -145,7 +212,52 @@ class _AdminOrdersState extends State<AdminOrders> {
                     color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
           ),
         ]),
+        const SizedBox(height: 16),
+        _buildSearchBar(),
       ]),
+    );
+  }
+
+  // ── SEARCH BAR ────────────────────────────────────────────────────────────
+  Widget _buildSearchBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 3)),
+        ],
+      ),
+      child: TextField(
+        controller: _searchController,
+        onChanged: _onSearchChanged,
+        textInputAction: TextInputAction.search,
+        style: const TextStyle(fontSize: 14, color: Color(0xFF2D3142)),
+        decoration: InputDecoration(
+          isDense: true,
+          hintText:
+              "Search order ID, name, complaint, category...",
+          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
+          prefixIcon: Icon(Icons.search_rounded,
+              color: AppColors.primary, size: 22),
+          suffixIcon: _searchQuery.isEmpty
+              ? null
+              : GestureDetector(
+                  onTap: _clearSearch,
+                  child: Icon(Icons.close_rounded,
+                      color: Colors.grey[500], size: 20),
+                ),
+          contentPadding:
+              const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
     );
   }
 
@@ -164,7 +276,7 @@ class _AdminOrdersState extends State<AdminOrders> {
             final color    = f == "ALL" ? AppColors.primary : _statusColor(f);
 
             return GestureDetector(
-              onTap: () => _applyFilter(f),
+              onTap: () => _selectFilter(f),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 margin: const EdgeInsets.only(right: 8),
@@ -394,23 +506,35 @@ class _AdminOrdersState extends State<AdminOrders> {
   }
 
   Widget _emptyState() {
+    final hasSearch = _searchQuery.isNotEmpty;
     return Center(
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.receipt_long_rounded, size: 64, color: Colors.grey[300]),
+        Icon(hasSearch ? Icons.search_off_rounded : Icons.receipt_long_rounded,
+            size: 64, color: Colors.grey[300]),
         const SizedBox(height: 14),
         Text(
-          selectedFilter == "ALL"
-              ? "No orders found"
-              : "No ${_shortStatus(selectedFilter)} orders",
+          hasSearch
+              ? "No orders match \"${_searchController.text}\""
+              : selectedFilter == "ALL"
+                  ? "No orders found"
+                  : "No ${_shortStatus(selectedFilter)} orders",
+          textAlign: TextAlign.center,
           style: TextStyle(
               color: Colors.grey[400],
               fontSize: 15,
               fontWeight: FontWeight.w500),
         ),
-        if (selectedFilter != "ALL") ...[
+        if (hasSearch) ...[
           const SizedBox(height: 10),
           TextButton(
-            onPressed: () => _applyFilter("ALL"),
+            onPressed: _clearSearch,
+            child: Text("Clear search",
+                style: TextStyle(color: AppColors.primary)),
+          ),
+        ] else if (selectedFilter != "ALL") ...[
+          const SizedBox(height: 10),
+          TextButton(
+            onPressed: () => _selectFilter("ALL"),
             child: Text("Show all orders",
                 style: TextStyle(color: AppColors.primary)),
           ),
@@ -426,7 +550,7 @@ class _AdminOrdersState extends State<AdminOrders> {
       backgroundColor: const Color(0xFFF4F6F8),
       body: Column(children: [
 
-        // Fixed header + filter bar
+        // Fixed header (with search) + filter bar
         _buildHeader(),
         _buildFilterBar(),
 

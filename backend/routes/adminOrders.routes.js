@@ -3,8 +3,24 @@ const router     = express.Router();
 const db         = require("../config/db");
 const nodemailer = require("nodemailer");
 
+const {
+  sendCancellationNotifications,
+  sendRescheduleConfirmation,
+  sendCaretakerAssignmentNotifications,
+} = require("../services/notification.service");
+
 /* =====================================================
    NODEMAILER
+   ⚠️ Kept only for the two refund emails below, which
+   weren't reported as broken. Cancel/reschedule/assign now
+   go through services/notification.service.js instead (see
+   imports above), since that's the path that's actually
+   delivering mail elsewhere in the app (booking confirmed,
+   caretaker alerts). If refund emails ever go quiet too,
+   the likely cause is the same: Gmail's "service: gmail"
+   basic auth needs a Google App Password (regular password
+   won't work) — worth migrating these to sendEmail() as well
+   at that point.
 ===================================================== */
 
 const transporter = nodemailer.createTransport({
@@ -27,7 +43,7 @@ const sendMail = async ({ to, subject, html }) => {
 };
 
 /* =====================================================
-   EMAIL TEMPLATES
+   EMAIL TEMPLATES (refunds only — see note above)
 ===================================================== */
 
 const refundApprovedEmail = ({ name, email, amount, orderCode }) =>
@@ -78,81 +94,6 @@ const refundRejectedEmail = ({ name, email, amount, orderCode, reason }) =>
           <strong>Reason:</strong> ${reason || "Does not meet refund eligibility criteria."}
         </p>
       </div>
-      <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-      <p style="color:#999;font-size:12px;text-align:center">Medico Healthcare Services</p>
-    </div>
-  </div>`,
-  });
-
-/* =====================================================
-   ✅ NEW — Order cancellation notification email (to careseeker)
-   Sent when admin cancels a booking, so the user isn't just
-   staring at a status change in the app with no explanation.
-===================================================== */
-
-const orderCancelledByAdminEmail = ({ name, email, orderCode, reason }) =>
-  sendMail({
-    to: email,
-    subject: `Your Booking ${orderCode} Has Been Cancelled`,
-    html: `
-  <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#f9f9f9;border-radius:12px;overflow:hidden">
-    <div style="background:#EF4444;padding:32px 28px;text-align:center">
-      <h1 style="color:#fff;margin:0;font-size:22px">Booking Cancelled</h1>
-    </div>
-    <div style="padding:28px">
-      <p style="color:#333;font-size:15px">Hi <strong>${name}</strong>,</p>
-      <p style="color:#555;font-size:14px;line-height:1.7">
-        Your booking <strong>${orderCode}</strong> has been cancelled by the
-        <strong>Medico team</strong>.
-      </p>
-      <div style="background:#fff0f0;border-left:4px solid #EF4444;border-radius:6px;padding:14px 16px;margin:20px 0">
-        <p style="margin:0;color:#c0392b;font-size:13.5px">
-          <strong>Reason:</strong> ${reason}
-        </p>
-      </div>
-      <p style="color:#555;font-size:13.5px;line-height:1.7">
-        If you paid online, please check the app for refund eligibility and status.
-        We apologise for the inconvenience.
-      </p>
-      <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-      <p style="color:#999;font-size:12px;text-align:center">Medico Healthcare Services</p>
-    </div>
-  </div>`,
-  });
-
-
-  /* =====================================================
-   ✅ NEW — Reschedule notification email (admin-initiated)
-===================================================== */
-
-const orderRescheduledByAdminEmail = ({ name, email, orderCode, oldDate, oldSlot, newDate, newSlot }) =>
-  sendMail({
-    to: email,
-    subject: `Your Booking ${orderCode} Has Been Rescheduled`,
-    html: `
-  <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#f9f9f9;border-radius:12px;overflow:hidden">
-    <div style="background:linear-gradient(135deg,#1B7F6E,#25A98F);padding:32px 28px;text-align:center">
-      <h1 style="color:#fff;margin:0;font-size:22px">Booking Rescheduled</h1>
-    </div>
-    <div style="padding:28px">
-      <p style="color:#333;font-size:15px">Hi <strong>${name}</strong>,</p>
-      <p style="color:#555;font-size:14px;line-height:1.7">
-        Your booking <strong>${orderCode}</strong> has been rescheduled by the
-        <strong>Medico team</strong>.
-      </p>
-      <table style="width:100%;border-collapse:collapse;margin:20px 0">
-        <tr>
-          <td style="padding:10px;color:#999;font-size:13px">Previous</td>
-          <td style="padding:10px;color:#999;font-size:13px;text-decoration:line-through">${oldDate}, ${oldSlot}</td>
-        </tr>
-        <tr>
-          <td style="padding:10px;color:#0F6E56;font-weight:700;font-size:13px">New</td>
-          <td style="padding:10px;color:#0F6E56;font-weight:700;font-size:13px">${newDate}, ${newSlot}</td>
-        </tr>
-      </table>
-      <p style="color:#555;font-size:13.5px;line-height:1.7">
-        If you have any questions about this change, please contact our support team.
-      </p>
       <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
       <p style="color:#999;font-size:12px;text-align:center">Medico Healthcare Services</p>
     </div>
@@ -351,6 +292,9 @@ router.get("/:id/otp", async (req, res) => {
    POST /:id/assign  — ASSIGN / REASSIGN CARETAKER
    Slot conflict check before assigning
    Sets status → ACCEPTED
+   ✅ UPDATED — now emails + pushes BOTH the caretaker
+   (new job assigned) and the careseeker (caretaker found)
+   once the assignment succeeds.
 ===================================================== */
 
 router.post("/:id/assign", async (req, res) => {
@@ -404,10 +348,14 @@ router.post("/:id/assign", async (req, res) => {
       [caretaker_id, caretaker_id, id]
     );
 
-    return res.json({
+    res.json({
       success: true,
       message: "Caretaker assigned successfully",
     });
+
+    setImmediate(() =>
+      sendCaretakerAssignmentNotifications({ orderId: id, caretakerId: caretaker_id })
+    );
   } catch (err) {
     console.error("ASSIGN ERROR:", err);
     return res.status(500).json({ success: false, message: "Assignment failed" });
@@ -416,9 +364,13 @@ router.post("/:id/assign", async (req, res) => {
 
 /* =====================================================
    PUT /:id/cancel  — CANCEL ORDER (admin)
-   ✅ UPDATED: now stamps cancelled_by = 'admin' so the
-   user-facing app can show "Cancelled by the Medico team"
-   instead of a generic message, and emails the careseeker.
+   Stamps cancelled_by = 'admin' so the user-facing app can
+   show "Cancelled by the Medico team" instead of a generic
+   message.
+   ✅ UPDATED — email now goes through notification.service
+   (the path that's actually delivering mail elsewhere),
+   and notifies the caretaker too when one was assigned,
+   not just the careseeker.
 ===================================================== */
 
 router.put("/:id/cancel", async (req, res) => {
@@ -432,10 +384,7 @@ router.put("/:id/cancel", async (req, res) => {
 
   try {
     const [[order]] = await db.query(
-      `SELECT o.order_code, u.first_name, u.email
-       FROM orders o
-       LEFT JOIN users u ON u.id = o.user_id
-       WHERE o.id = ?`,
+      `SELECT id FROM orders WHERE id = ?`,
       [id]
     );
 
@@ -454,16 +403,9 @@ router.put("/:id/cancel", async (req, res) => {
 
     res.json({ success: true, message: "Order cancelled" });
 
-    if (order.email) {
-      setImmediate(() =>
-        orderCancelledByAdminEmail({
-          name:      order.first_name || "there",
-          email:     order.email,
-          orderCode: order.order_code || `#${id}`,
-          reason,
-        })
-      );
-    }
+    setImmediate(() =>
+      sendCancellationNotifications({ orderId: id, reason })
+    );
   } catch (err) {
     console.error("PUT /:id/cancel:", err);
     res.status(500).json({ success: false, message: "Cancel failed" });
@@ -477,6 +419,9 @@ router.put("/:id/cancel", async (req, res) => {
    for when a careseeker calls support after a caretaker has
    already accepted, since the in-app button disappears then.
    Body: { date, slot_id }
+   ✅ UPDATED — email now goes through notification.service,
+   and notifies the assigned caretaker too, not just the
+   careseeker.
 ===================================================== */
 
 router.post("/:id/reschedule", async (req, res) => {
@@ -492,7 +437,7 @@ router.post("/:id/reschedule", async (req, res) => {
     await conn.beginTransaction();
 
     const [[order]] = await conn.query(
-      `SELECT o.*, u.first_name, u.email
+      `SELECT o.*, u.first_name, u.email, u.fcm_token AS user_fcm_token
        FROM orders o
        LEFT JOIN users u ON u.id = o.user_id
        WHERE o.id = ? FOR UPDATE`,
@@ -567,19 +512,32 @@ router.post("/:id/reschedule", async (req, res) => {
       order: { id, date, slot: hhmm },
     });
 
-    if (order.email) {
-      setImmediate(() =>
-        orderRescheduledByAdminEmail({
-          name:      order.first_name || "there",
-          email:     order.email,
-          orderCode: order.order_code || `#${id}`,
-          oldDate:   order.date,
-          oldSlot:   order.slot,
-          newDate:   date,
-          newSlot:   hhmm,
-        })
-      );
-    }
+    setImmediate(async () => {
+      let caretaker = null;
+      if (order.caretaker_id) {
+        const [[ct]] = await db.query(
+          `SELECT first_name, email, fcm_token FROM users WHERE id = ?`,
+          [order.caretaker_id]
+        );
+        caretaker = ct || null;
+      }
+
+      if (order.email) {
+        sendRescheduleConfirmation({
+          user: {
+            first_name: order.first_name,
+            email:      order.email,
+            fcm_token:  order.user_fcm_token,
+          },
+          order:   { order_code: order.order_code || `#${id}` },
+          oldDate: order.date,
+          oldSlot: order.slot,
+          newDate: date,
+          newSlot: hhmm,
+          caretaker,
+        });
+      }
+    });
   } catch (err) {
     if (conn) await conn.rollback();
     console.error("ADMIN RESCHEDULE ERROR:", err);

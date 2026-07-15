@@ -314,6 +314,22 @@ const orderTable = ({
 
   `;
 };
+
+/* ─────────────────────────────────────────
+   HELPER — fetch a careseeker/caretaker row by id
+   (kept minimal + reused everywhere below so cancel/
+   reschedule/assign never miss a field again)
+───────────────────────────────────────── */
+const getUserById = async (id) => {
+  if (!id) return null;
+  const [[u]] = await db.query(
+    `SELECT id, first_name, last_name, email, mobile, fcm_token
+     FROM users WHERE id = ?`,
+    [id]
+  );
+  return u || null;
+};
+
 /* ─────────────────────────────────────────
    USER BOOKING CONFIRMATION
 ───────────────────────────────────────── */
@@ -401,7 +417,7 @@ const sendBookingConfirmedToUser = async ({
 };
 
 /* ─────────────────────────────────────────
-   CARETAKER ALERTS
+   CARETAKER ALERTS (booking available to accept)
 ───────────────────────────────────────── */
 
 const sendBookingAlertToCaretakers = async ({
@@ -521,57 +537,201 @@ const sendBookingAlertToCaretakers = async ({
 };
 
 /* ─────────────────────────────────────────
-   CANCELLATION
+   ✅ NEW — CARETAKER ASSIGNMENT NOTIFICATIONS
+   Fired when admin assigns/reassigns a caretaker to an
+   order. Notifies BOTH the caretaker (they've been given
+   a job) and the careseeker (who's coming to help them),
+   by email + push.
 ───────────────────────────────────────── */
 
-const sendCancellationNotifications = async (order) => {
-
+const sendCaretakerAssignmentNotifications = async ({ orderId, caretakerId }) => {
   try {
+    const [[order]] = await db.query(
+      `SELECT id, order_code, user_id, date, slot, category, total, location
+       FROM orders WHERE id = ?`,
+      [orderId]
+    );
 
-    const [[user]] = await db.query(`
-      SELECT first_name,email,fcm_token
-      FROM users
-      WHERE id = ?
-    `, [order.user_id]);
-
-    if (user?.fcm_token) {
-
-      await sendPushNotification(
-        user.fcm_token,
-        "❌ Booking Cancelled",
-        `${order.order_code} cancelled`
-      );
-
+    if (!order) {
+      console.log("ASSIGNMENT NOTIF: order not found", orderId);
+      return;
     }
 
-    if (user?.email) {
+    const careseeker = await getUserById(order.user_id);
+    const caretaker   = await getUserById(caretakerId);
 
+    /* ── Notify the caretaker ── */
+    if (caretaker?.fcm_token) {
+      await sendPushNotification(
+        caretaker.fcm_token,
+        "🩺 New Booking Assigned",
+        `${order.order_code} has been assigned to you`
+      );
+    }
+
+    if (caretaker?.email) {
       await sendEmail({
-        to: user.email,
-
-        subject: `❌ Booking Cancelled - ${order.order_code}`,
-
+        to: caretaker.email,
+        subject: `🩺 New Booking Assigned - ${order.order_code}`,
         html: emailTemplate({
-          title: "Booking Cancelled",
-
-          subtitle: "Your booking has been cancelled",
-
-          statusColor: "#dc2626",
-
+          title: "Booking Assigned",
+          subtitle: "A new booking has been assigned to you",
+          statusColor: "#2563eb",
           content: `
-            <p>Hello <b>${user.first_name}</b>,</p>
-
+            <p>Hello <b>${caretaker.first_name}</b>,</p>
             <p>
-              Your booking has been cancelled successfully.
+              You have been assigned a new booking. Please open the
+              Medico app for full patient details and be ready at the
+              scheduled time.
             </p>
-
             ${orderTable({
-              orderCode: order.order_code
+              orderCode: order.order_code,
+              serviceName: order.category,
+              dateStr: order.date,
+              slot: order.slot,
+              location: order.location,
+              total: order.total
             })}
           `
         })
       });
+      console.log("ASSIGNMENT EMAIL SENT TO CARETAKER:", caretaker.email);
+    }
 
+    /* ── Notify the careseeker ── */
+    if (careseeker?.fcm_token) {
+      await sendPushNotification(
+        careseeker.fcm_token,
+        "🩺 Caretaker Assigned",
+        `A caretaker has been assigned to ${order.order_code}`
+      );
+    }
+
+    if (careseeker?.email) {
+      await sendEmail({
+        to: careseeker.email,
+        subject: `🩺 Caretaker Assigned - ${order.order_code}`,
+        html: emailTemplate({
+          title: "Caretaker Assigned",
+          subtitle: "Your booking now has a caretaker assigned",
+          statusColor: "#2563eb",
+          content: `
+            <p>Hello <b>${careseeker.first_name}</b>,</p>
+            <p>
+              <b>${caretaker?.first_name || "A caretaker"}</b> has been
+              assigned to your booking${caretaker?.mobile ? ` and can be reached at ${caretaker.mobile}` : ""}.
+            </p>
+            ${orderTable({
+              orderCode: order.order_code,
+              serviceName: order.category,
+              dateStr: order.date,
+              slot: order.slot
+            })}
+          `
+        })
+      });
+      console.log("ASSIGNMENT EMAIL SENT TO CARESEEKER:", careseeker.email);
+    }
+
+  } catch (err) {
+    console.log("ASSIGNMENT NOTIF ERROR:", err);
+  }
+};
+
+/* ─────────────────────────────────────────
+   CANCELLATION
+   ✅ UPDATED — now looks up the order itself (instead of
+   relying on the caller to pass every field), and notifies
+   the caretaker too when one was assigned, not just the
+   careseeker. Accepts either sendCancellationNotifications(orderId, reason)
+   or the old sendCancellationNotifications(orderObjectWithIdAndReason)
+   shape, so existing callers elsewhere in the codebase keep working.
+───────────────────────────────────────── */
+
+const sendCancellationNotifications = async (orderIdOrOrder, maybeReason) => {
+
+  try {
+
+    const orderId = typeof orderIdOrOrder === "object"
+      ? (orderIdOrOrder.orderId ?? orderIdOrOrder.id ?? orderIdOrOrder.order_id)
+      : orderIdOrOrder;
+
+    const reason = maybeReason
+      ?? (typeof orderIdOrOrder === "object"
+            ? (orderIdOrOrder.reason ?? orderIdOrOrder.cancel_reason)
+            : undefined);
+
+    const [[order]] = await db.query(
+      `SELECT id, order_code, user_id, caretaker_id, assigned_caretaker_id
+       FROM orders WHERE id = ?`,
+      [orderId]
+    );
+
+    if (!order) {
+      console.log("CANCELLATION NOTIF: order not found", orderId);
+      return;
+    }
+
+    const careseeker = await getUserById(order.user_id);
+    const caretakerId = order.caretaker_id || order.assigned_caretaker_id;
+    const caretaker   = caretakerId ? await getUserById(caretakerId) : null;
+
+    /* ── Careseeker ── */
+    if (careseeker?.fcm_token) {
+      await sendPushNotification(
+        careseeker.fcm_token,
+        "❌ Booking Cancelled",
+        `${order.order_code} has been cancelled`
+      );
+    }
+
+    if (careseeker?.email) {
+      await sendEmail({
+        to: careseeker.email,
+        subject: `❌ Booking Cancelled - ${order.order_code}`,
+        html: emailTemplate({
+          title: "Booking Cancelled",
+          subtitle: "Your booking has been cancelled",
+          statusColor: "#dc2626",
+          content: `
+            <p>Hello <b>${careseeker.first_name}</b>,</p>
+            <p>
+              Your booking has been cancelled${reason ? ` — <b>Reason:</b> ${reason}` : ""}.
+            </p>
+            ${orderTable({ orderCode: order.order_code })}
+          `
+        })
+      });
+    }
+
+    /* ── Caretaker (only if one had been assigned) ── */
+    if (caretaker?.fcm_token) {
+      await sendPushNotification(
+        caretaker.fcm_token,
+        "❌ Booking Cancelled",
+        `${order.order_code} has been cancelled by admin`
+      );
+    }
+
+    if (caretaker?.email) {
+      await sendEmail({
+        to: caretaker.email,
+        subject: `❌ Booking Cancelled - ${order.order_code}`,
+        html: emailTemplate({
+          title: "Booking Cancelled",
+          subtitle: "A booking assigned to you has been cancelled",
+          statusColor: "#dc2626",
+          content: `
+            <p>Hello <b>${caretaker.first_name}</b>,</p>
+            <p>
+              The booking <b>${order.order_code}</b> that was assigned to
+              you has been cancelled${reason ? ` — <b>Reason:</b> ${reason}` : ""}.
+              You no longer need to attend this appointment.
+            </p>
+            ${orderTable({ orderCode: order.order_code })}
+          `
+        })
+      });
     }
 
   } catch (err) {
@@ -584,13 +744,12 @@ const sendCancellationNotifications = async (order) => {
 
 /* =====================================================
    RESCHEDULE CONFIRMATION EMAIL
+   ✅ UPDATED — now also notifies the caretaker (email +
+   push) when the order already has one assigned, in
+   addition to the careseeker.
 ===================================================== */
 
-const sendRescheduleConfirmation = async ({ user, order, newDate, newSlot, oldDate, oldSlot }) => {
-  if (!user?.email) {
-    console.warn(`⚠️ Skipping reschedule email — no email on file for user ${user?.id || "unknown"}`);
-    return;
-  }
+const sendRescheduleConfirmation = async ({ user, order, newDate, newSlot, oldDate, oldSlot, caretaker }) => {
 
   const fmtDate = (d) =>
     d
@@ -601,43 +760,59 @@ const sendRescheduleConfirmation = async ({ user, order, newDate, newSlot, oldDa
         })
       : "-";
 
-  const subject = `Booking Rescheduled — ${order.order_code || order.orderCode}`;
+  const orderCode = order.order_code || order.orderCode;
 
-  const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-      <h2 style="color:#0f766e;">Your booking has been rescheduled</h2>
-      <p>Hi ${user.first_name || "there"},</p>
-      <p>Your Medico booking <strong>${order.order_code || order.orderCode}</strong> has been moved to a new date and time.</p>
+  const notifyOne = async (person, isCaretaker) => {
+    if (!person?.email) {
+      console.warn(`⚠️ Skipping reschedule email — no email on file for ${isCaretaker ? "caretaker" : "user"} ${person?.id || "unknown"}`);
+    } else {
+      const subject = `Booking Rescheduled — ${orderCode}`;
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+          <h2 style="color:#0f766e;">${isCaretaker ? "A booking you're assigned to has been rescheduled" : "Your booking has been rescheduled"}</h2>
+          <p>Hi ${person.first_name || "there"},</p>
+          <p>${isCaretaker ? "The" : "Your"} Medico booking <strong>${orderCode}</strong> has been moved to a new date and time.</p>
 
-      <table style="width:100%; border-collapse:collapse; margin:16px 0;">
-        <tr>
-          <td style="padding:8px; color:#94a3b8;">Previous</td>
-          <td style="padding:8px; text-decoration:line-through; color:#94a3b8;">
-            ${fmtDate(oldDate)}, ${oldSlot || "-"}
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:8px; color:#0f766e; font-weight:bold;">New</td>
-          <td style="padding:8px; color:#0f766e; font-weight:bold;">
-            ${fmtDate(newDate)}, ${newSlot}
-          </td>
-        </tr>
-      </table>
+          <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+            <tr>
+              <td style="padding:8px; color:#94a3b8;">Previous</td>
+              <td style="padding:8px; text-decoration:line-through; color:#94a3b8;">
+                ${fmtDate(oldDate)}, ${oldSlot || "-"}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px; color:#0f766e; font-weight:bold;">New</td>
+              <td style="padding:8px; color:#0f766e; font-weight:bold;">
+                ${fmtDate(newDate)}, ${newSlot}
+              </td>
+            </tr>
+          </table>
 
-      <p>If you didn't request this change, please contact our support team immediately.</p>
-      <p style="color:#94a3b8; font-size:12px; margin-top:24px;">— Team Medico</p>
-    </div>
-  `;
+          <p>If you have any questions about this change, please contact our support team.</p>
+          <p style="color:#94a3b8; font-size:12px; margin-top:24px;">— Team Medico</p>
+        </div>
+      `;
 
-  try {
-    await sendEmail({ to: user.email, subject, html }); // ← use your existing Brevo sendEmail helper
-    console.log(`✅ Reschedule email sent to ${user.email}`);
-  } catch (err) {
-    console.error("RESCHEDULE EMAIL ERROR:", err);
-  }
+      try {
+        await sendEmail({ to: person.email, subject, html });
+        console.log(`✅ Reschedule email sent to ${person.email}`);
+      } catch (err) {
+        console.error("RESCHEDULE EMAIL ERROR:", err);
+      }
+    }
+
+    if (person?.fcm_token) {
+      await sendPushNotification(
+        person.fcm_token,
+        "📅 Booking Rescheduled",
+        `${orderCode} moved to ${fmtDate(newDate)}, ${newSlot}`
+      );
+    }
+  };
+
+  await notifyOne(user, false);
+  if (caretaker) await notifyOne(caretaker, true);
 };
-
- 
 
 
 module.exports = {
@@ -645,4 +820,5 @@ module.exports = {
   sendBookingAlertToCaretakers,
   sendCancellationNotifications,
   sendRescheduleConfirmation,
+  sendCaretakerAssignmentNotifications,
 };
