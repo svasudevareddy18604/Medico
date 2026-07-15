@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/api.dart';
 
 /// Bottom sheet used from Order Details to move a booking to a new
@@ -121,10 +122,17 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
       _error = null;
     });
     try {
+      final prefs  = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id');
+
       final res = await http.post(
         Uri.parse(Api.rescheduleOrder(widget.orderId)),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"date": _selectedDate, "slot_id": _selectedSlotId}),
+        body: jsonEncode({
+          "date": _selectedDate,
+          "slot_id": _selectedSlotId,
+          "user_id": userId,
+        }),
       );
       final data = jsonDecode(res.body);
 

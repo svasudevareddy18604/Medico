@@ -116,6 +116,7 @@ class Api {
   static String updateOrderStatus(int id)   => "$baseUrl/admin/orders/status/$id";
   static String updatePaymentStatus(int id) => "$baseUrl/admin/orders/payment/$id";
   static String refundOrder(int id)         => "$baseUrl/admin/orders/refund/$id";
+  static String adminRescheduleOrder(int orderId) => "$baseUrl/admin/orders/$orderId/reschedule";
 
   /* ================= ADMIN USERS ================= */
 

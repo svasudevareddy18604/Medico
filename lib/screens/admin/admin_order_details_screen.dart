@@ -14,6 +14,381 @@ class AdminOrderDetailsScreen extends StatefulWidget {
   State<AdminOrderDetailsScreen> createState() => _AdminOrderDetailsScreenState();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  ADMIN RESCHEDULE BOTTOM SHEET
+//  Works at any pre-completion order status. Posts to the admin-only
+//  reschedule route, which bypasses the cooldown/notice-period limits
+//  that exist to stop end-user self-service abuse — this is a support
+//  action taken on the careseeker's behalf.
+// ══════════════════════════════════════════════════════════════════════════
+
+class _AdminRescheduleSheet extends StatefulWidget {
+  final int orderId;
+  final String currentDate;
+  final String currentSlot;
+  final void Function(String newDate, String newSlot) onRescheduled;
+
+  const _AdminRescheduleSheet({
+    required this.orderId,
+    required this.currentDate,
+    required this.currentSlot,
+    required this.onRescheduled,
+  });
+
+  @override
+  State<_AdminRescheduleSheet> createState() => _AdminRescheduleSheetState();
+}
+
+class _AdminRescheduleSheetState extends State<_AdminRescheduleSheet> {
+  late List<Map<String, String>> _dates;
+  String _selectedDate = "";
+
+  List<Map<String, String>> _slots = [];
+  int? _selectedSlotId;
+  String _selectedSlotTime = "";
+
+  bool _loadingSlots = false;
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _dates = _buildDates();
+    _selectedDate = _dates.first["value"]!;
+    _fetchSlots();
+  }
+
+  List<Map<String, String>> _buildDates() {
+    final now = DateTime.now();
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return List.generate(14, (i) {
+      final d = now.add(Duration(days: i));
+      final value =
+          "${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+      final label = i == 0 ? "Today" : "${days[d.weekday - 1]} ${d.day}";
+      return {"value": value, "label": label};
+    });
+  }
+
+  Future<void> _fetchSlots() async {
+    setState(() {
+      _loadingSlots = true;
+      _selectedSlotId = null;
+      _selectedSlotTime = "";
+      _error = null;
+    });
+    try {
+      final res = await http
+          .get(Uri.parse(
+              "${Api.getAvailableSlots(widget.orderId)}?date=$_selectedDate"))
+          .timeout(const Duration(seconds: 10));
+      final data = jsonDecode(res.body);
+
+      if (data["success"] == true) {
+        final rawSlots = List<Map<String, dynamic>>.from(data["slots"] ?? []);
+        setState(() {
+          _slots = rawSlots
+              .map((s) => {
+                    "id": s["id"].toString(),
+                    "slot_time": s["slot_time"].toString(),
+                  })
+              .toList();
+          _loadingSlots = false;
+        });
+      } else {
+        setState(() {
+          _slots = [];
+          _loadingSlots = false;
+          _error = data["message"]?.toString();
+        });
+      }
+    } catch (_) {
+      setState(() {
+        _slots = [];
+        _loadingSlots = false;
+        _error = "Could not load slots. Please try again.";
+      });
+    }
+  }
+
+  String _formatTime(String hhmm) {
+    try {
+      final p = hhmm.split(":");
+      return TimeOfDay(hour: int.parse(p[0]), minute: int.parse(p[1])).format(context);
+    } catch (_) {
+      return hhmm;
+    }
+  }
+
+  Future<void> _confirmReschedule() async {
+    if (_selectedSlotId == null) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      final res = await http.post(
+        Uri.parse(Api.adminRescheduleOrder(widget.orderId)),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "date": _selectedDate,
+          "slot_id": _selectedSlotId,
+        }),
+      );
+      final data = jsonDecode(res.body);
+
+      if (mounted) {
+        if (data["success"] == true) {
+          Navigator.pop(context);
+          widget.onRescheduled(_selectedDate, _selectedSlotTime);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text("Booking rescheduled successfully!",
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              backgroundColor: AppColors.primary,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        } else {
+          setState(() =>
+              _error = data["message"]?.toString() ?? "Could not reschedule booking.");
+          if ((data["message"]?.toString() ?? "").toLowerCase().contains("taken")) {
+            _fetchSlots();
+          }
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _error = "Network error. Please try again.");
+    }
+    if (mounted) setState(() => _submitting = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chipBg = Colors.grey[100]!;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 50,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: Colors.deepPurple.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.event_repeat_rounded,
+                      color: Colors.deepPurple, size: 20),
+                ),
+                const SizedBox(width: 12),
+                const Text("Reschedule Booking (Admin)",
+                    style: TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
+              ]),
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: Text(
+                  "Current: ${widget.currentDate}, ${widget.currentSlot}",
+                  style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              const Text("Select Date",
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF2D3142))),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 48,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _dates.length,
+                  itemBuilder: (_, i) {
+                    final sel = _dates[i]["value"] == _selectedDate;
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() => _selectedDate = _dates[i]["value"]!);
+                        _fetchSlots();
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.only(right: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: sel ? Colors.deepPurple : chipBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: sel ? Colors.deepPurple : Colors.transparent,
+                          ),
+                        ),
+                        child: Text(_dates[i]["label"]!,
+                            style: TextStyle(
+                              color: sel ? Colors.white : Colors.black87,
+                              fontWeight: FontWeight.w600,
+                            )),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              Row(children: [
+                const Text("Available Slots",
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF2D3142))),
+                const Spacer(),
+                if (!_loadingSlots)
+                  GestureDetector(
+                    onTap: _fetchSlots,
+                    child: const Icon(Icons.refresh_rounded, size: 18, color: Colors.deepPurple),
+                  ),
+              ]),
+              const SizedBox(height: 10),
+
+              if (_loadingSlots)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: CircularProgressIndicator(),
+                  ),
+                )
+              else if (_slots.isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Column(children: [
+                      Icon(Icons.event_busy_rounded, color: Colors.grey[400], size: 28),
+                      const SizedBox(height: 8),
+                      Text("No slots available for this date",
+                          style: TextStyle(color: Colors.grey[500])),
+                    ]),
+                  ),
+                )
+              else
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: _slots.map((s) {
+                    final id  = int.parse(s["id"]!);
+                    final t   = s["slot_time"]!;
+                    final sel = _selectedSlotId == id;
+                    return GestureDetector(
+                      onTap: () => setState(() {
+                        _selectedSlotId = id;
+                        _selectedSlotTime = t;
+                      }),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: sel ? Colors.deepPurple : chipBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: sel ? Colors.deepPurple : Colors.grey.shade300,
+                          ),
+                        ),
+                        child: Text(_formatTime(t),
+                            style: TextStyle(
+                              color: sel ? Colors.white : Colors.black87,
+                              fontWeight: FontWeight.w500,
+                            )),
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+              if (_error != null) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.withOpacity(0.2)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.error_outline_rounded, size: 16, color: Colors.red),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: Text(_error!,
+                            style: const TextStyle(color: Colors.red, fontSize: 12.5))),
+                  ]),
+                ),
+              ],
+
+              const SizedBox(height: 20),
+
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      side: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    child: Text("Cancel",
+                        style: TextStyle(color: Colors.grey[600], fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: (_selectedSlotId == null || _submitting) ? null : _confirmReschedule,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepPurple,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 0,
+                    ),
+                    child: _submitting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : Text(
+                            _selectedSlotId == null ? "Select a slot" : "Confirm Reschedule",
+                            style: const TextStyle(
+                                fontSize: 14.5, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   late Map o;
   bool _loadingCaretakers = false;
@@ -59,7 +434,11 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     _                     => s,
   };
 
-  bool get _canCancel  => ["PENDING", "CONFIRMED"].contains(_status);
+  // ── FIX (Bug 2): both getters kept — reschedule availability and
+  // cancel availability are two separate, independent conditions.
+  bool get _canReschedule => !["COMPLETED", "CANCELLED"].contains(_status);
+  bool get _canCancel => ["PENDING", "CONFIRMED"].contains(_status);
+
   bool get _canAssign  =>
       ["PENDING", "CONFIRMED", "CARETAKER_CANCELLED"].contains(_status);
 
@@ -408,6 +787,28 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
             label: const Text("Confirm Cancel"),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── FIX (Bug 1): _showAdminRescheduleSheet() now lives here as its own
+  // top-level method, right after _showCancelDialog() and before
+  // _showAssignSheet() — no longer nested inside another method.
+  void _showAdminRescheduleSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _AdminRescheduleSheet(
+        orderId: o['id'] as int,
+        currentDate: o['date']?.toString() ?? "",
+        currentSlot: o['slot']?.toString() ?? "",
+        onRescheduled: (newDate, newSlot) {
+          setState(() {
+            o['date'] = newDate;
+            o['slot'] = newSlot;
+          });
+        },
       ),
     );
   }
@@ -1215,6 +1616,25 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
                 ),
               ),
 
+            // Reschedule button
+            if (_canReschedule) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.event_repeat_rounded, size: 20, color: Colors.deepPurple),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.deepPurple, width: 1.5),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  onPressed: _showAdminRescheduleSheet,
+                  label: const Text("Reschedule Booking",
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                ),
+              ),
+            ],
+
             // Cancel button
             if (_canCancel) ...[
               const SizedBox(height: 12),
@@ -1225,13 +1645,11 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.red, width: 1.5),
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   ),
                   onPressed: _showCancelDialog,
                   label: const Text("Cancel Order",
-                      style: TextStyle(fontSize: 15,
-                          fontWeight: FontWeight.bold, color: Colors.red)),
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.red)),
                 ),
               ),
             ],

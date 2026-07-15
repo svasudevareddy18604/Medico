@@ -113,7 +113,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _logout() async {
     CaretakerStatusMonitor().stop();
     final prefs = await SharedPreferences.getInstance();
+
+    // ✅ Preserve address + app-preference data across logout.
+    // prefs.clear() wipes EVERY key (including these), which was making the
+    // saved address disappear on next login even though it was never
+    // deleted. We snapshot these keys, clear everything (to drop the auth
+    // token/session), then restore just these.
+    final userId = widget.userId;
+    final savedLocation      = prefs.getString("user_location_${userId}");
+    final savedAddressDeleted = prefs.getBool("address_deleted_${userId}");
+    final savedSelectedId    = prefs.getInt("selected_address_id_${userId}");
+    final savedLat           = prefs.getDouble("user_lat_${userId}");
+    final savedLng           = prefs.getDouble("user_lng_${userId}");
+    final savedDarkMode      = prefs.getBool("dark_mode");
+    final savedLanguage      = prefs.getString("app_language");
+    final savedScreenSecurity = prefs.getBool("screen_security");
+
     await prefs.clear();
+
+    if (savedLocation != null) await prefs.setString("user_location_${userId}", savedLocation);
+    if (savedAddressDeleted != null) await prefs.setBool("address_deleted_${userId}", savedAddressDeleted);
+    if (savedSelectedId != null) await prefs.setInt("selected_address_id_${userId}", savedSelectedId);
+    if (savedLat != null) await prefs.setDouble("user_lat_${userId}", savedLat);
+    if (savedLng != null) await prefs.setDouble("user_lng_${userId}", savedLng);
+    if (savedDarkMode != null) await prefs.setBool("dark_mode", savedDarkMode);
+    if (savedLanguage != null) await prefs.setString("app_language", savedLanguage);
+    if (savedScreenSecurity != null) await prefs.setBool("screen_security", savedScreenSecurity);
+
     if (!mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
   }

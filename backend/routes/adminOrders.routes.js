@@ -120,6 +120,45 @@ const orderCancelledByAdminEmail = ({ name, email, orderCode, reason }) =>
   </div>`,
   });
 
+
+  /* =====================================================
+   ✅ NEW — Reschedule notification email (admin-initiated)
+===================================================== */
+
+const orderRescheduledByAdminEmail = ({ name, email, orderCode, oldDate, oldSlot, newDate, newSlot }) =>
+  sendMail({
+    to: email,
+    subject: `Your Booking ${orderCode} Has Been Rescheduled`,
+    html: `
+  <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#f9f9f9;border-radius:12px;overflow:hidden">
+    <div style="background:linear-gradient(135deg,#1B7F6E,#25A98F);padding:32px 28px;text-align:center">
+      <h1 style="color:#fff;margin:0;font-size:22px">Booking Rescheduled</h1>
+    </div>
+    <div style="padding:28px">
+      <p style="color:#333;font-size:15px">Hi <strong>${name}</strong>,</p>
+      <p style="color:#555;font-size:14px;line-height:1.7">
+        Your booking <strong>${orderCode}</strong> has been rescheduled by the
+        <strong>Medico team</strong>.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:20px 0">
+        <tr>
+          <td style="padding:10px;color:#999;font-size:13px">Previous</td>
+          <td style="padding:10px;color:#999;font-size:13px;text-decoration:line-through">${oldDate}, ${oldSlot}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px;color:#0F6E56;font-weight:700;font-size:13px">New</td>
+          <td style="padding:10px;color:#0F6E56;font-weight:700;font-size:13px">${newDate}, ${newSlot}</td>
+        </tr>
+      </table>
+      <p style="color:#555;font-size:13.5px;line-height:1.7">
+        If you have any questions about this change, please contact our support team.
+      </p>
+      <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+      <p style="color:#999;font-size:12px;text-align:center">Medico Healthcare Services</p>
+    </div>
+  </div>`,
+  });
+
 /* =====================================================
    GET /  — ALL ORDERS (admin)
 ===================================================== */
@@ -428,6 +467,125 @@ router.put("/:id/cancel", async (req, res) => {
   } catch (err) {
     console.error("PUT /:id/cancel:", err);
     res.status(500).json({ success: false, message: "Cancel failed" });
+  }
+});
+
+/* =====================================================
+   POST /:id/reschedule  — ADMIN RESCHEDULE
+   Works at any pre-completion status (unlike the user-facing
+   reschedule, which only works while CONFIRMED). This exists
+   for when a careseeker calls support after a caretaker has
+   already accepted, since the in-app button disappears then.
+   Body: { date, slot_id }
+===================================================== */
+
+router.post("/:id/reschedule", async (req, res) => {
+  let conn;
+  try {
+    const { id } = req.params;
+    const { date, slot_id } = req.body;
+
+    if (!date || !slot_id)
+      return res.status(400).json({ success: false, message: "Date and slot are required" });
+
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+
+    const [[order]] = await conn.query(
+      `SELECT o.*, u.first_name, u.email
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.user_id
+       WHERE o.id = ? FOR UPDATE`,
+      [id]
+    );
+
+    if (!order) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (["COMPLETED", "CANCELLED"].includes(order.status)) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot reschedule a ${order.status.toLowerCase()} booking.`,
+      });
+    }
+
+    const [[targetSlot]] = await conn.query(
+      `SELECT * FROM service_slots WHERE id = ? AND slot_date = ? FOR UPDATE`,
+      [slot_id, date]
+    );
+
+    if (!targetSlot) {
+      await conn.rollback();
+      return res.status(400).json({ success: false, message: "Selected slot no longer exists." });
+    }
+
+    if (targetSlot.status !== "available") {
+      await conn.rollback();
+      return res.status(400).json({ success: false, message: "That slot is already taken." });
+    }
+
+    const hhmm = targetSlot.slot_time.toString().slice(0, 5);
+
+    await conn.query(
+      `UPDATE service_slots SET status = 'available', order_id = NULL
+       WHERE order_id = ? AND status = 'booked'`,
+      [id]
+    );
+    await conn.query(
+      `UPDATE service_slots SET status = 'booked', order_id = ? WHERE id = ?`,
+      [id, slot_id]
+    );
+
+    const isFirstReschedule = order.reschedule_count === 0;
+    await conn.query(
+      `UPDATE orders
+       SET date = ?, slot = ?,
+           reschedule_count = reschedule_count + 1,
+           last_rescheduled_at = NOW(),
+           original_date = ${isFirstReschedule ? "?" : "original_date"},
+           original_slot = ${isFirstReschedule ? "?" : "original_slot"}
+       WHERE id = ?`,
+      isFirstReschedule
+        ? [date, hhmm, order.date, order.slot, id]
+        : [date, hhmm, id]
+    );
+
+    await conn.query(
+      `INSERT INTO reschedule_log (order_id, old_date, old_slot, new_date, new_slot)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, order.date, order.slot, date, hhmm]
+    );
+
+    await conn.commit();
+
+    res.json({
+      success: true,
+      message: "Booking rescheduled",
+      order: { id, date, slot: hhmm },
+    });
+
+    if (order.email) {
+      setImmediate(() =>
+        orderRescheduledByAdminEmail({
+          name:      order.first_name || "there",
+          email:     order.email,
+          orderCode: order.order_code || `#${id}`,
+          oldDate:   order.date,
+          oldSlot:   order.slot,
+          newDate:   date,
+          newSlot:   hhmm,
+        })
+      );
+    }
+  } catch (err) {
+    if (conn) await conn.rollback();
+    console.error("ADMIN RESCHEDULE ERROR:", err);
+    return res.status(500).json({ success: false, message: "Reschedule failed" });
+  } finally {
+    if (conn) conn.release();
   }
 });
 

@@ -556,7 +556,7 @@ router.post("/:orderId/reschedule", rescheduleLimiter, async (req, res) => {
   let conn;
   try {
     const { orderId } = req.params;
-    const { date, slot_id } = req.body;
+    const { date, slot_id, user_id } = req.body;
 
     if (!date || !slot_id)
       return res.status(400).json({ success: false, message: "Date and slot are required" });
@@ -575,17 +575,16 @@ router.post("/:orderId/reschedule", rescheduleLimiter, async (req, res) => {
     }
 
     // ── Ownership check ──────────────────────────────────────────────
-    // TODO: wire this to your auth middleware once available.
-    // If you attach the logged-in user to req.user (e.g. via JWT
-    // middleware), uncomment this block — it's the single most
-    // important guard on this route, since right now anyone who
-    // knows an orderId can reschedule someone else's booking.
-    //
-    // if (order.user_id !== req.user.id) {
-    //   await conn.rollback();
-    //   return res.status(403).json({ success: false, message: "Not authorized to modify this booking." });
-    // }
-
+    // NOTE: this checks the user_id the client claims to be, not a
+    // cryptographically verified identity — the app has no auth
+    // tokens yet, so this matches the trust model used by every other
+    // route (place, cancel, etc). It stops accidental cross-account
+    // mistakes, but not a malicious actor who fakes the user_id field.
+    // Real protection requires JWT/session auth — worth adding later.
+    if (user_id && order.user_id !== Number(user_id)) {
+      await conn.rollback();
+      return res.status(403).json({ success: false, message: "Not authorized to modify this booking." });
+    }
     if (order.status !== "CONFIRMED") {
       await conn.rollback();
       return res.status(400).json({
