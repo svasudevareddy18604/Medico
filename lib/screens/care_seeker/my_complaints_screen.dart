@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:medico/config/api.dart';
 import 'package:medico/utils/app_colors.dart';
+import 'package:mime/mime.dart';
+import 'package:http_parser/http_parser.dart';
 
 /// ── Cloudinary config ──────────────────────────────────────────────────
 class CloudinaryConfig {
@@ -619,8 +621,16 @@ class _NewComplaintScreenState extends State<_NewComplaintScreen> {
       ..fields["description"] = _descController.text.trim();
 
     for (final img in _images) {
-      request.files.add(await http.MultipartFile.fromPath("images", img.path));
-    }
+  final mimeType = lookupMimeType(img.path) ?? 'image/jpeg';
+  final parts = mimeType.split('/');
+  request.files.add(
+    await http.MultipartFile.fromPath(
+      "images",
+      img.path,
+      contentType: MediaType(parts[0], parts[1]),
+    ),
+  );
+}
 
     final streamed = await request.send().timeout(const Duration(seconds: 30));
     final res = await http.Response.fromStream(streamed);

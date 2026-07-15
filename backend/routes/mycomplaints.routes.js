@@ -9,12 +9,19 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 5 }, // 5MB/file, max 5 files
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    if (!allowed.includes(file.mimetype)) {
-      return cb(new Error("Only image files are allowed"));
-    }
-    cb(null, true);
-  },
+  const allowed = [
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+  ];
+  if (!allowed.includes(file.mimetype)) {
+    return cb(new Error(`Only image files are allowed (got ${file.mimetype})`));
+  }
+  cb(null, true);
+},
 });
 
 // Uploads a single buffer to Cloudinary, resolves with the secure_url
