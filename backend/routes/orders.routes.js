@@ -1,10 +1,16 @@
 const router = require("express").Router();
 const db     = require("../config/db");
+
 const {
   sendBookingConfirmedToUser,
   sendBookingAlertToCaretakers,
   sendCancellationNotifications,
+  sendRescheduleConfirmation,
 } = require("../services/notificationEmail.service");
+
+const {
+  sendReschedulePush,
+} = require("../services/pushNotification.service");
 
 /* =====================================================
    HELPERS
@@ -625,11 +631,40 @@ router.post("/:orderId/reschedule", async (req, res) => {
 
     await conn.commit();
 
-    return res.json({
+    res.json({
       success: true,
       message: "Booking rescheduled successfully",
       order: { id: orderId, date, slot: hhmm },
     });
+
+    // ✅ NEW — fire email + push AFTER response is sent, non-blocking
+    setImmediate(async () => {
+      try {
+        const [[user]] = await db.query(
+          `SELECT first_name, email, fcm_token FROM users WHERE id = ?`,
+          [order.user_id]
+        );
+
+        await sendRescheduleConfirmation({
+          user,
+          order: { order_code: order.order_code },
+          newDate: date,
+          newSlot: hhmm,
+          oldDate: order.date,
+          oldSlot: order.slot,
+        });
+
+        await sendReschedulePush({
+          fcmToken: user?.fcm_token,
+          orderCode: order.order_code,
+          newDate: date,
+          newSlot: hhmm,
+        });
+      } catch (err) {
+        console.error("RESCHEDULE NOTIFICATION ERROR:", err);
+      }
+    });
+
   } catch (err) {
     if (conn) await conn.rollback();
     console.error("RESCHEDULE ERROR:", err);

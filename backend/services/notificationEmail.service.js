@@ -582,8 +582,67 @@ const sendCancellationNotifications = async (order) => {
 
 };
 
+/* =====================================================
+   RESCHEDULE CONFIRMATION EMAIL
+===================================================== */
+
+const sendRescheduleConfirmation = async ({ user, order, newDate, newSlot, oldDate, oldSlot }) => {
+  if (!user?.email) {
+    console.warn(`⚠️ Skipping reschedule email — no email on file for user ${user?.id || "unknown"}`);
+    return;
+  }
+
+  const fmtDate = (d) =>
+    d
+      ? new Date(d).toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : "-";
+
+  const subject = `Booking Rescheduled — ${order.order_code || order.orderCode}`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+      <h2 style="color:#0f766e;">Your booking has been rescheduled</h2>
+      <p>Hi ${user.first_name || "there"},</p>
+      <p>Your Medico booking <strong>${order.order_code || order.orderCode}</strong> has been moved to a new date and time.</p>
+
+      <table style="width:100%; border-collapse:collapse; margin:16px 0;">
+        <tr>
+          <td style="padding:8px; color:#94a3b8;">Previous</td>
+          <td style="padding:8px; text-decoration:line-through; color:#94a3b8;">
+            ${fmtDate(oldDate)}, ${oldSlot || "-"}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px; color:#0f766e; font-weight:bold;">New</td>
+          <td style="padding:8px; color:#0f766e; font-weight:bold;">
+            ${fmtDate(newDate)}, ${newSlot}
+          </td>
+        </tr>
+      </table>
+
+      <p>If you didn't request this change, please contact our support team immediately.</p>
+      <p style="color:#94a3b8; font-size:12px; margin-top:24px;">— Team Medico</p>
+    </div>
+  `;
+
+  try {
+    await sendEmail({ to: user.email, subject, html }); // ← use your existing Brevo sendEmail helper
+    console.log(`✅ Reschedule email sent to ${user.email}`);
+  } catch (err) {
+    console.error("RESCHEDULE EMAIL ERROR:", err);
+  }
+};
+
+ 
+
+
 module.exports = {
   sendBookingConfirmedToUser,
   sendBookingAlertToCaretakers,
-  sendCancellationNotifications
+  sendCancellationNotifications,
+  sendRescheduleConfirmation,
 };

@@ -88,8 +88,26 @@ const sendPushWithData = async (fcmToken, title, body, data = {}) => {
   }
 };
 
+/* =====================================================
+   RESCHEDULE PUSH NOTIFICATION
+===================================================== */
+
+const sendReschedulePush = async ({ fcmToken, orderCode, newDate, newSlot }) => {
+  const fmtDate = (d) =>
+    d
+      ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })
+      : "-";
+
+  await sendPushNotification(
+    fcmToken,
+    "📅 Booking Rescheduled",
+    `${orderCode} moved to ${fmtDate(newDate)}, ${newSlot}`
+  );
+};
+
 
 module.exports = {
   sendPushNotification,
-  sendPushWithData
+  sendPushWithData,
+  sendReschedulePush,
 };

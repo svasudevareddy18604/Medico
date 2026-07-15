@@ -6,9 +6,10 @@ import 'package:medico/utils/app_colors.dart';
 import '../../config/api.dart';
 
 /// Bottom sheet used from Order Details to move a booking to a new
-/// date/time. Only ever shown while the order is still CONFIRMED
-/// (no caretaker has accepted yet) — the caller is responsible for
-/// that check.
+/// date/time, pulled live from the admin-managed slot pool
+/// (service_slots table). Only ever shown while the order is still
+/// CONFIRMED (no caretaker has accepted yet) — the caller is
+/// responsible for that check.
 class RescheduleBottomSheet extends StatefulWidget {
   final int orderId;
   final String currentDate;
@@ -32,18 +33,15 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
 
   late List<Map<String, String>> _dates;
   String _selectedDate = "";
-  String _selectedSlot = "";
-  List<String> _slots = [];
+
+  // Each slot: {"id": "12", "slot_time": "09:00"}
+  List<Map<String, String>> _slots = [];
+  int? _selectedSlotId;
+  String _selectedSlotTime = "";
+
   bool _loadingSlots = false;
   bool _submitting = false;
   String? _error;
-
-  // Default hourly slots — adjust to match your real service hours,
-  // or wire this up to whatever slot source your booking flow already uses.
-  static const List<String> _slotTimes = [
-    "08:00", "09:00", "10:00", "11:00", "12:00", "13:00",
-    "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00",
-  ];
 
   @override
   void initState() {
@@ -65,34 +63,30 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
     });
   }
 
+  // ── Fetch live slots from the admin slot pool ──────────────────────
   Future<void> _fetchSlots() async {
     setState(() {
       _loadingSlots = true;
-      _selectedSlot = "";
+      _selectedSlotId = null;
+      _selectedSlotTime = "";
       _error = null;
     });
     try {
       final res = await http
           .get(Uri.parse(
-              "${Api.baseUrl}/orders/${widget.orderId}/available-slots?date=$_selectedDate"))
+              "${Api.getAvailableSlots(widget.orderId)}?date=$_selectedDate"))
           .timeout(const Duration(seconds: 10));
       final data = jsonDecode(res.body);
 
       if (data["success"] == true) {
-        final booked = List<String>.from(data["booked_slots"] ?? []);
-        final now = DateTime.now();
-        final d = DateTime.parse(_selectedDate);
-
-        final available = _slotTimes.where((t) {
-          if (booked.contains(t)) return false;
-          final parts = t.split(":");
-          final slotDt = DateTime(
-              d.year, d.month, d.day, int.parse(parts[0]), int.parse(parts[1]));
-          return slotDt.isAfter(now);
-        }).toList();
-
+        final rawSlots = List<Map<String, dynamic>>.from(data["slots"] ?? []);
         setState(() {
-          _slots = available;
+          _slots = rawSlots
+              .map((s) => {
+                    "id": s["id"].toString(),
+                    "slot_time": s["slot_time"].toString(),
+                  })
+              .toList();
           _loadingSlots = false;
         });
       } else {
@@ -111,26 +105,26 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
     }
   }
 
-  String _formatTime(String t) {
+  String _formatTime(String hhmm) {
     try {
-      final p = t.split(":");
+      final p = hhmm.split(":");
       return TimeOfDay(hour: int.parse(p[0]), minute: int.parse(p[1])).format(context);
     } catch (_) {
-      return t;
+      return hhmm;
     }
   }
 
   Future<void> _confirmReschedule() async {
-    if (_selectedSlot.isEmpty) return;
+    if (_selectedSlotId == null) return;
     setState(() {
       _submitting = true;
       _error = null;
     });
     try {
       final res = await http.post(
-        Uri.parse("${Api.baseUrl}/orders/${widget.orderId}/reschedule"),
+        Uri.parse(Api.rescheduleOrder(widget.orderId)),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"date": _selectedDate, "slot": _selectedSlot}),
+        body: jsonEncode({"date": _selectedDate, "slot_id": _selectedSlotId}),
       );
       final data = jsonDecode(res.body);
 
@@ -151,6 +145,10 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
         } else {
           setState(() =>
               _error = data["message"]?.toString() ?? "Could not reschedule booking.");
+          // If the slot was taken between load and submit, refresh the list.
+          if ((data["message"]?.toString() ?? "").toLowerCase().contains("taken")) {
+            _fetchSlots();
+          }
         }
       }
     } catch (_) {
@@ -255,9 +253,17 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
               ),
               const SizedBox(height: 20),
 
-              Text("Available Slots",
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600, color: textColor, fontSize: 13)),
+              Row(children: [
+                Text("Available Slots",
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, color: textColor, fontSize: 13)),
+                const Spacer(),
+                if (!_loadingSlots)
+                  GestureDetector(
+                    onTap: _fetchSlots,
+                    child: Icon(Icons.refresh_rounded, size: 18, color: AppColors.primary),
+                  ),
+              ]),
               const SizedBox(height: 10),
 
               if (_loadingSlots)
@@ -271,18 +277,27 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
                 Center(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 20),
-                    child: Text("No slots available for this date",
-                        style: TextStyle(color: subColor)),
+                    child: Column(children: [
+                      Icon(Icons.event_busy_rounded, color: subColor, size: 28),
+                      const SizedBox(height: 8),
+                      Text("No slots available for this date",
+                          style: TextStyle(color: subColor)),
+                    ]),
                   ),
                 )
               else
                 Wrap(
                   spacing: 10,
                   runSpacing: 10,
-                  children: _slots.map((t) {
-                    final sel = _selectedSlot == t;
+                  children: _slots.map((s) {
+                    final id  = int.parse(s["id"]!);
+                    final t   = s["slot_time"]!;
+                    final sel = _selectedSlotId == id;
                     return GestureDetector(
-                      onTap: () => setState(() => _selectedSlot = t),
+                      onTap: () => setState(() {
+                        _selectedSlotId = id;
+                        _selectedSlotTime = t;
+                      }),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
@@ -343,14 +358,14 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: GestureDetector(
-                    onTap: (_selectedSlot.isEmpty || _submitting) ? null : _confirmReschedule,
+                    onTap: (_selectedSlotId == null || _submitting) ? null : _confirmReschedule,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       decoration: BoxDecoration(
                         gradient:
-                            (_selectedSlot.isNotEmpty && !_submitting) ? AppColors.gradient : null,
-                        color: (_selectedSlot.isEmpty || _submitting)
+                            (_selectedSlotId != null && !_submitting) ? AppColors.gradient : null,
+                        color: (_selectedSlotId == null || _submitting)
                             ? (_dark ? Colors.grey.shade700 : Colors.grey[300])
                             : null,
                         borderRadius: BorderRadius.circular(14),
@@ -364,11 +379,11 @@ class _RescheduleBottomSheetState extends State<RescheduleBottomSheet> {
                                   strokeWidth: 2, color: Colors.white),
                             )
                           : Text(
-                              _selectedSlot.isEmpty ? "Select a slot" : "Confirm Reschedule",
+                              _selectedSlotId == null ? "Select a slot" : "Confirm Reschedule",
                               style: TextStyle(
                                 fontSize: 14.5,
                                 fontWeight: FontWeight.bold,
-                                color: _selectedSlot.isEmpty
+                                color: _selectedSlotId == null
                                     ? (_dark ? Colors.grey.shade400 : Colors.grey.shade600)
                                     : Colors.white,
                               ),
