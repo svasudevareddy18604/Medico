@@ -971,7 +971,7 @@ class _ComplaintDetailScreen extends StatelessWidget {
               ],
               if (c.adminResponse != null && c.adminResponse!.trim().isNotEmpty) ...[
                 const SizedBox(height: 20),
-                _sectionTitle("Response from Admin", isDark),
+                _sectionTitle("Response from Medico Support team", isDark),
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,

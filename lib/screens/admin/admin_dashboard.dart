@@ -7,6 +7,7 @@ import 'admin_orders.dart';
 import 'admin_caregivers.dart';
 import 'admin_timeslot_screen.dart';
 import 'admin_withdraw_screen.dart';
+import 'careseekercomplaints_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
   final int userId;
@@ -93,9 +94,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
         children: [
           _appHeader(context),
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
               child: GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
                 crossAxisCount: 2,
                 crossAxisSpacing: 14,
                 mainAxisSpacing: 14,
@@ -142,6 +146,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     color: AppColors.secondary,
                     onTap: () => Navigator.push(context,
                         MaterialPageRoute(builder: (_) => const AdminWithdrawScreen())),
+                  ),
+                  DashboardCard(
+                    title: "Complaints",
+                    icon: Icons.report_problem_rounded,
+                    color: const Color(0xFFD84315),
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const AdminComplaintsScreen())),
                   ),
                 ],
               ),

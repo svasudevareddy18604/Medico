@@ -26,6 +26,7 @@ const orderRoutes = require("./routes/orders.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const documentRoutes = require("./routes/document.routes");
 const careSeekerOrderDetails = require("./routes/careseekerorderdetails.routes");
+const invoiceRoutes = require("./routes/invoice.routes");
 const careseekerEmergencyContactRoutes = require("./routes/careseekeremergencycontact.routes");
 
 const careseekerCouponRoutes = require("./routes/careseekercoupon.routes");
@@ -179,6 +180,8 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/documents", documentRoutes);
 
 app.use("/api/careseeker/order", careSeekerOrderDetails);
+
+app.use("/api/invoice", invoiceRoutes);
 
 /* =========================================
    PAYMENT

@@ -36,12 +36,14 @@ class Api {
   static String caretakerPaymentDetails(int orderId) => "$baseUrl/caretaker/payment/$orderId";
 
 
-  /* ================= COMPLAINTS ================= */
-static const String submitComplaint = "$baseUrl/complaints";
-static String getUserComplaints(int userId) => "$baseUrl/complaints/user/$userId";
-static String getComplaintDetails(int id) => "$baseUrl/complaints/$id";
-static const String adminComplaints = "$baseUrl/admin/complaints";
-static String updateComplaintStatus(int id) => "$baseUrl/admin/complaints/status/$id";
+ /* ================= COMPLAINTS ================= */
+  static const String submitComplaint = "$baseUrl/complaints";
+  static String getUserComplaints(int userId) => "$baseUrl/complaints/user/$userId";
+  static String getComplaintDetails(int id) => "$baseUrl/complaints/$id";
+
+  /* ================= ADMIN COMPLAINTS ================= */
+  static const String adminComplaints = "$baseUrl/admin/complaints";
+  static String updateComplaintStatus(int id) => "$baseUrl/admin/complaints/status/$id";
 
   /* ================= DOCUMENTS ================= */
 

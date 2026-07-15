@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
 import 'orders_screen.dart';
+import '../../models/invoice_data.dart';
+import '../../services/invoice_pdf_service.dart';
+import 'invoice_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  OrderSuccessScreen
@@ -107,6 +110,24 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
     } catch (_) { return raw; }
   }
 
+  // ── Invoice ──────────────────────────────────────────────────────────────
+  InvoiceData get _invoiceData => InvoiceData.fromOrders(
+        orderId: widget.orderId,
+        orderCode: widget.orderCode,
+        orders: widget.orders,
+        subtotal: widget.subtotal,
+        serviceCharge: widget.serviceCharge,
+        discount: widget.discount,
+        total: widget.total,
+      );
+
+  void _openInvoice() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => InvoiceScreen(invoice: _invoiceData)),
+    );
+  }
+
   // ── Lifecycle ────────────────────────────────────────────────────────────
   @override
   void initState() {
@@ -181,6 +202,8 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
                 _infoTile(cardBg, Icons.confirmation_number_rounded,
                     "Booking ID", _displayCode, true),
                 const SizedBox(height: 30),
+                _invoiceButtons(),
+                const SizedBox(height: 12),
                 _ctaTrack(),
                 const SizedBox(height: 12),
                 _ctaHome(),
@@ -548,6 +571,52 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
           ),
         ),
       );
+
+  // ── Invoice buttons ──────────────────────────────────────────────────────
+  Widget _invoiceButtons() => FadeTransition(
+    opacity: _fade,
+    child: Row(children: [
+      Expanded(
+        child: OutlinedButton.icon(
+          onPressed: _openInvoice,
+          icon: const Icon(Icons.receipt_long_rounded, size: 18),
+          label: const Text("View Invoice",
+              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color.fromARGB(255, 205, 205, 124),
+            padding: const EdgeInsets.symmetric(vertical: 13),
+            side: BorderSide(color: const Color.fromARGB(255, 229, 15, 51).withOpacity(0.35)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: OutlinedButton.icon(
+          onPressed: () async {
+            try {
+              await InvoicePdfService.shareInvoice(_invoiceData);
+            } catch (_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Couldn't generate the invoice.")),
+                );
+              }
+            }
+          },
+          icon: const Icon(Icons.download_rounded, size: 18),
+          label: const Text("Download PDF",
+              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color.fromARGB(255, 105, 127, 66),
+            padding: const EdgeInsets.symmetric(vertical: 13),
+            side: BorderSide(color: const Color.fromARGB(255, 215, 15, 15).withOpacity(0.35)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      ),
+    ]),
+  );
 
   // ── CTAs ──────────────────────────────────────────────────────────────────
   Widget _ctaTrack() => FadeTransition(
