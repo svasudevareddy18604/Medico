@@ -47,6 +47,11 @@ class Api {
 /* ================= ADMIN INVOICES================= */
   static const String adminInvoices = "$baseUrl/invoice/admin/all";
 
+  // Add this inside your Api class (e.g. near the ADMIN ORDERS section):
+
+  /* ================= ADMIN DASHBOARD ================= */
+  static const String adminDashboardSummary = "$baseUrl/admin/dashboard/summary";
+
 
   /* ================= ADMIN COMPLAINTS ================= */
   static const String adminComplaints = "$baseUrl/admin/complaints";

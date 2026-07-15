@@ -728,7 +728,7 @@ class _NewComplaintScreenState extends State<_NewComplaintScreen> {
                         fontSize: 13.5, color: isDark ? Colors.white : Colors.black87),
                     decoration: const InputDecoration(
                       hintText: "Be as specific as you can — what happened, when, "
-                          "and who was involved. This helps our team resolve it faster.",
+                          "and who was involved. This helps our team resolve it faster.Please Share Booking ID, If Possible",
                       hintMaxLines: 4,
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.all(14),

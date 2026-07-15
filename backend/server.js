@@ -45,6 +45,7 @@ const adminPromotionRoutes = require("./routes/adminpromotions.routes");
 const adminNotificationRoutes = require("./routes/adminnotification.routes");
 const serviceChargesRoutes = require("./routes/adminServiceCharges.routes");
 const adminCareSeekerDetailsRoutes = require("./routes/admincareseeker_details.routes");
+const adminDashboardRoutes = require("./routes/admin_dashboard.routes");
 
 const caretakerRoutes = require("./routes/caretaker.routes");
 const caretakerDocsRoutes = require("./routes/caretaker_documents.routes");
@@ -248,6 +249,8 @@ app.use("/api/withdrawals", withdrawalRoutes);
 ========================================= */
 
 app.use("/api/admin", adminRoutes);
+
+app.use("/api/admin/dashboard", adminDashboardRoutes);
 
 app.use("/api/admin", adminProfileRoutes);
 
