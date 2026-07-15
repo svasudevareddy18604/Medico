@@ -12,6 +12,8 @@ import '../care_seeker/helpcenter_screen.dart';
 import '../care_seeker/livechat_screen.dart';
 import '../care_seeker/careseeker_location.dart';
 import '../care_seeker/emergency_contact_screen.dart';
+import '../care_seeker/my_bookings_screen.dart';
+import '../care_seeker/my_complaints_screen.dart';
 import 'package:medico/config/api.dart';
 import 'package:medico/main.dart';
 import 'package:medico/utils/app_colors.dart';
@@ -582,6 +584,16 @@ String get _email =>
   Icons.person_rounded,
   SettingsStrings.myProfile(_languageCode),
                   () => _go(ProfileScreen(userId: widget.userId)), isDark),
+              Divider(height: 1, color: AppColors.border),
+              _tile(
+  Icons.calendar_month_rounded,
+  "My Bookings",
+                  () => _go(MyBookingsScreen(userId: widget.userId)), isDark),
+              Divider(height: 1, color: AppColors.border),
+              _tile(
+  Icons.report_problem_rounded,
+  "My Complaints",
+                  () => _go(MyComplaintsScreen(userId: widget.userId)), isDark),
               Divider(height: 1, color: AppColors.border),
               _tile(
   Icons.location_on_rounded,
