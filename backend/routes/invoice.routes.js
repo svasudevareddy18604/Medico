@@ -31,6 +31,7 @@ const displayPaymentStatus = (s) => {
     case "PAID": return "Paid";
     case "PENDING": return "Pending";
     case "FAILED": return "Failed";
+    case "REFUNDED": return "Refunded";
     default: return s || "-";
   }
 };

@@ -44,6 +44,10 @@ class Api {
   static String getUserComplaints(int userId) => "$baseUrl/complaints/user/$userId";
   static String getComplaintDetails(int id) => "$baseUrl/complaints/$id";
 
+/* ================= ADMIN INVOICES================= */
+  static const String adminInvoices = "$baseUrl/invoice/admin/all";
+
+
   /* ================= ADMIN COMPLAINTS ================= */
   static const String adminComplaints = "$baseUrl/admin/complaints";
   static String updateComplaintStatus(int id) => "$baseUrl/admin/complaints/status/$id";
