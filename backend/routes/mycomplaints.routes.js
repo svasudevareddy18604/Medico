@@ -1,33 +1,39 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
 const db = require("../config/db"); // mysql2/promise pool — adjust path if yours differs
+const cloudinary = require("../config/cloudinary");
 
-// ── Multer setup for complaint images ──────────────────────────────
-const uploadDir = path.join(__dirname, "..", "uploads", "complaints");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname)}`;
-    cb(null, unique);
-  },
-});
-
+// ── Multer setup — memory storage (buffer goes straight to Cloudinary, no disk writes)
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 5 }, // 5MB/file, max 5 files
   fileFilter: (req, file, cb) => {
-    const allowed = [".jpg", ".jpeg", ".png", ".webp"];
-    if (!allowed.includes(path.extname(file.originalname).toLowerCase())) {
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (!allowed.includes(file.mimetype)) {
       return cb(new Error("Only image files are allowed"));
     }
     cb(null, true);
   },
 });
+
+// Uploads a single buffer to Cloudinary, resolves with the secure_url
+function uploadBufferToCloudinary(buffer) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "medico/complaints",
+        resource_type: "image",
+        transformation: [{ quality: "auto", fetch_format: "auto" }],
+      },
+      (err, result) => {
+        if (err) return reject(err);
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+}
 
 // ══════════════════════════════════════════════════════════════════
 //  CARE-SEEKER ENDPOINTS
@@ -45,14 +51,25 @@ router.post("/complaints", upload.array("images", 5), async (req, res) => {
       });
     }
 
-    const imagePaths = (req.files || []).map(
-      (f) => `uploads/complaints/${f.filename}`
-    );
+    let imageUrls = [];
+    if (req.files && req.files.length > 0) {
+      try {
+        imageUrls = await Promise.all(
+          req.files.map((f) => uploadBufferToCloudinary(f.buffer))
+        );
+      } catch (uploadErr) {
+        console.error("CLOUDINARY UPLOAD ERROR:", uploadErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload one or more images. Please try again.",
+        });
+      }
+    }
 
     const [result] = await db.query(
       `INSERT INTO complaints (user_id, category, description, images, status)
        VALUES (?, ?, ?, ?, 'pending')`,
-      [user_id, category, description, JSON.stringify(imagePaths)]
+      [user_id, category, description, JSON.stringify(imageUrls)]
     );
 
     const [rows] = await db.query(`SELECT * FROM complaints WHERE id = ?`, [
@@ -158,6 +175,14 @@ router.put("/admin/complaints/status/:id", async (req, res) => {
     console.error("ADMIN UPDATE COMPLAINT STATUS ERROR:", err);
     return res.status(500).json({ success: false, message: "Failed to update complaint." });
   }
+});
+
+// Multer error handler (file too large, too many files, bad type, etc.)
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError || err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  next();
 });
 
 module.exports = router;

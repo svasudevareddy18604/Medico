@@ -1,10 +1,19 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:medico/config/api.dart';
 import 'package:medico/utils/app_colors.dart';
-import 'dart:io';
+
+/// ── Cloudinary config ──────────────────────────────────────────────────
+class CloudinaryConfig {
+  static const String cloudName = "YOUR_CLOUD_NAME";
+  static const String uploadPreset = "YOUR_UPLOAD_PRESET";
+
+  static String get uploadUrl =>
+      "https://api.cloudinary.com/v1_1/$cloudName/image/upload";
+}
 
 /// ── Status ──────────────────────────────────────────────────────────────
 enum ComplaintStatus { pending, inProgress, resolved, rejected }
@@ -92,7 +101,7 @@ class Complaint {
   final int id;
   final String category;
   final String description;
-  final List<String> images; // full URLs, built from backend's relative paths
+  final List<String> images; // full URLs (Cloudinary secure_url values)
   final DateTime createdAt;
   final ComplaintStatus status;
   final String? adminResponse;
@@ -481,6 +490,7 @@ class _NewComplaintScreenState extends State<_NewComplaintScreen> {
   String? _selectedCategory;
   final List<XFile> _images = [];
   bool _submitting = false;
+  String _submitLabel = "Submit Complaint";
 
   static const int _maxImages = 5;
 
@@ -557,58 +567,91 @@ class _NewComplaintScreenState extends State<_NewComplaintScreen> {
     );
   }
 
-  Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select a category.")),
-      );
-      return;
-    }
-
-    setState(() => _submitting = true);
-
+  /// Uploads a single picked image directly to Cloudinary (unsigned preset)
+  /// and returns the secure_url, or null on failure.
+  Future<String?> _uploadToCloudinary(XFile file) async {
     try {
-      final uri = Uri.parse(Api.submitComplaint);
+      final uri = Uri.parse(CloudinaryConfig.uploadUrl);
       final request = http.MultipartRequest("POST", uri)
-        ..fields["user_id"] = widget.userId.toString()
-        ..fields["category"] = _selectedCategory!
-        ..fields["description"] = _descController.text.trim();
-
-      for (final img in _images) {
-        request.files.add(await http.MultipartFile.fromPath("images", img.path));
-      }
+        ..fields["upload_preset"] = CloudinaryConfig.uploadPreset
+        ..files.add(await http.MultipartFile.fromPath("file", file.path));
 
       final streamed = await request.send().timeout(const Duration(seconds: 30));
       final res = await http.Response.fromStream(streamed);
 
-      if (!mounted) return;
-
-      if (res.statusCode == 200 || res.statusCode == 201) {
+      if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
-        if (data["success"] == true && data["complaint"] != null) {
-          final complaint = Complaint.fromJson(Map<String, dynamic>.from(data["complaint"]));
-          Navigator.pop(context, complaint);
-          return;
-        }
-        _snack(data["message"] ?? "Failed to submit complaint.");
-      } else {
-        String message = "Failed to submit complaint. Please try again.";
-        try {
-          final decoded = jsonDecode(res.body);
-          if (decoded is Map && decoded["message"] != null) {
-            message = decoded["message"].toString();
-          }
-        } catch (_) {}
-        _snack(message);
+        return data["secure_url"]?.toString();
       }
+      debugPrint("CLOUDINARY UPLOAD FAILED (${res.statusCode}): ${res.body}");
+      return null;
     } catch (e) {
-      debugPrint("SUBMIT COMPLAINT ERROR: $e");
-      if (mounted) _snack("Something went wrong. Check your connection.");
+      debugPrint("CLOUDINARY UPLOAD ERROR: $e");
+      return null;
+    }
+  }
+
+  /// Uploads all picked images to Cloudinary in parallel, returns the
+  /// list of secure_urls. Returns null if any upload fails.
+  Future<List<String>?> _uploadAllImages() async {
+    if (_images.isEmpty) return [];
+    final results = await Future.wait(_images.map(_uploadToCloudinary));
+    if (results.any((url) => url == null)) return null;
+    return results.cast<String>();
+  }
+
+  Future<void> _submit() async {
+  if (!(_formKey.currentState?.validate() ?? false)) return;
+  if (_selectedCategory == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Please select a category.")),
+    );
+    return;
+  }
+
+  setState(() => _submitting = true);
+
+  try {
+    final uri = Uri.parse(Api.submitComplaint);
+    final request = http.MultipartRequest("POST", uri)
+      ..fields["user_id"] = widget.userId.toString()
+      ..fields["category"] = _selectedCategory!
+      ..fields["description"] = _descController.text.trim();
+
+    for (final img in _images) {
+      request.files.add(await http.MultipartFile.fromPath("images", img.path));
     }
 
-    if (mounted) setState(() => _submitting = false);
+    final streamed = await request.send().timeout(const Duration(seconds: 30));
+    final res = await http.Response.fromStream(streamed);
+
+    if (!mounted) return;
+
+    if (res.statusCode == 200 || res.statusCode == 201) {
+      final data = jsonDecode(res.body);
+      if (data["success"] == true && data["complaint"] != null) {
+        final complaint = Complaint.fromJson(Map<String, dynamic>.from(data["complaint"]));
+        Navigator.pop(context, complaint);
+        return;
+      }
+      _snack(data["message"] ?? "Failed to submit complaint.");
+    } else {
+      String message = "Failed to submit complaint. Please try again.";
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded["message"] != null) {
+          message = decoded["message"].toString();
+        }
+      } catch (_) {}
+      _snack(message);
+    }
+  } catch (e) {
+    debugPrint("SUBMIT COMPLAINT ERROR: $e");
+    if (mounted) _snack("Something went wrong. Check your connection.");
   }
+
+  if (mounted) setState(() => _submitting = false);
+}
 
   void _snack(String msg) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(msg)));
@@ -749,7 +792,7 @@ class _NewComplaintScreenState extends State<_NewComplaintScreen> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(14),
                     child: Image.file(
-                      java_io_File(file.path),
+                      File(file.path),
                       width: 84, height: 84, fit: BoxFit.cover,
                     ),
                   ),
@@ -805,9 +848,18 @@ class _NewComplaintScreenState extends State<_NewComplaintScreen> {
             ),
             onPressed: _submitting ? null : _submit,
             child: _submitting
-                ? const SizedBox(
-                    width: 20, height: 20,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                      const SizedBox(width: 10),
+                      Text(_submitLabel,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
+                    ],
+                  )
                 : const Text("Submit Complaint",
                     style: TextStyle(
                         color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),

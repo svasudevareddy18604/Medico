@@ -11,6 +11,7 @@ const authRoutes = require("./routes/auth.routes");
 const forgotPasswordRoutes = require("./routes/forgotpassword.routes");
 const userRoutes = require("./routes/users.routes");
 const addressRoutes = require("./routes/address.routes");
+const complaintRoutes = require("./routes/mycomplaints.routes");
 
 const locationCheckRoutes = require("./routes/locationCheck.routes");
 const servicesRoutes = require("./routes/services.routes");
@@ -157,6 +158,7 @@ app.use("/api", locationCheckRoutes);
 app.use("/api/services", servicesRoutes);
 app.use("/api/feedback", feedbackRoutes);
 app.use("/api/emergency-contact", careseekerEmergencyContactRoutes);
+app.use("/api", complaintRoutes);
 
 /* =========================================
    CARETAKERS
