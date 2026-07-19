@@ -36,6 +36,13 @@ class _CaretakerLiveTrackingScreenState
   List<LatLng> _routePoints = [];
   double _heading = 0; // bike rotation, derived from route bearing
 
+  // ✅ NEW — throttles the OSRM route/polyline fetch so it doesn't hit the
+  // public router server every 3s (risk of silent rate-limiting). The
+  // caretaker marker itself still moves on EVERY poll — this only slows
+  // down how often the route line + heading are recomputed.
+  int _pollCount = 0;
+  static const int _routeEveryNPolls = 5; // ~15s at a 3s poll interval
+
   late AnimationController _pulseCtrl;
 
   bool get _dark => themeNotifier.value == ThemeMode.dark;
@@ -53,7 +60,6 @@ class _CaretakerLiveTrackingScreenState
   bool get _ready =>
       _cLat != null && _cLng != null && _uLat != null && _uLng != null;
 
-  // ✅ Fixed to match the actual joined columns from /orders/detail/:id
   bool get _isVerifiedCarer {
     final approval = (_order["caregiver_approval_status"] ?? "")
         .toString()
@@ -134,8 +140,16 @@ class _CaretakerLiveTrackingScreenState
             _order = data["order"];
             _loading = false;
           });
+          debugPrint(
+              "TRACKING POLL → caretaker=(${_cLat ?? '-'}, ${_cLng ?? '-'})  status=$_status");
+
           if (_ready) {
-            await _loadRoute();
+            _pollCount++;
+            // Only refetch the route line every ~15s, not every 3s — the
+            // marker position above already updated regardless of this.
+            if (_pollCount % _routeEveryNPolls == 0 || _routePoints.isEmpty) {
+              await _loadRoute();
+            }
             if (!_mapReady) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 _mapCtrl.move(LatLng(_cLat!, _cLng!), 15);
@@ -144,6 +158,8 @@ class _CaretakerLiveTrackingScreenState
             }
           }
         }
+      } else {
+        debugPrint("TRACKING FETCH BAD STATUS: ${res.statusCode} ${res.body}");
       }
     } catch (e) {
       debugPrint("TRACKING FETCH ERROR: $e");
@@ -160,7 +176,10 @@ class _CaretakerLiveTrackingScreenState
           "?overview=full&geometries=geojson";
       final res =
           await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return;
+      if (res.statusCode != 200) {
+        debugPrint("OSRM ROUTE BAD STATUS: ${res.statusCode}");
+        return;
+      }
       final data = jsonDecode(res.body);
       final coords = data["routes"][0]["geometry"]["coordinates"] as List;
       final pts = coords
