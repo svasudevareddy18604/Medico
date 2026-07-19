@@ -11,6 +11,7 @@ const {
 const {
   sendReschedulePush,
 } = require("../services/pushNotification.service");
+const { createInvoiceForOrder } = require("../services/invoiceService");
 
 const rateLimit = require("express-rate-limit");
 
@@ -332,6 +333,15 @@ router.post("/place", async (req, res) => {
       const serviceNamesForOrder =
         groupItems.map((i) => i.name || i.service_name).filter(Boolean).join(", ") ||
         category;
+
+      // ✅ Create the invoice now, inside the same transaction, so it
+      // exists in the DB immediately — not only when someone views it.
+      try {
+        await createInvoiceForOrder(orderId, conn);
+      } catch (invErr) {
+        console.error("INVOICE GENERATION FAILED for order", orderId, invErr);
+        throw invErr; // roll back the whole order if invoice creation fails
+      }
 
       createdOrders.push({
         order_id:      orderId,
