@@ -3,14 +3,20 @@ const router  = express.Router();
 const db      = require("../config/db");
 const { sendPushNotification } = require("../services/pushNotification.service");
 
-/* GET /caretaker/order-detail/:id */
-/* GET /caretaker/order-detail/:id */
+/* ═══════════════════════════════════════════════════════════
+   GET /caretaker/order-detail/:id
+   ✅ Includes otp, otp_verified, caretaker_latitude/longitude
+      (required by the Flutter order details + tracking screens)
+   ✅ Keeps the "latest doc per document_key" dedup logic
+═══════════════════════════════════════════════════════════ */
 router.get("/order-detail/:id", async (req, res) => {
   try {
     const [[order]] = await db.query(`
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.payment_id, o.status, o.caretaker_id, o.assigned_caretaker_id,
+             o.otp, o.otp_verified, o.otp_verified_at,
+             o.caretaker_latitude, o.caretaker_longitude,
              u.first_name AS careseeker_name, u.mobile AS careseeker_phone,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services,
              GROUP_CONCAT(DISTINCT bd.file_url     ORDER BY bd.uploaded_at SEPARATOR '|||') AS document_urls,
@@ -32,9 +38,11 @@ router.get("/order-detail/:id", async (req, res) => {
                 AND bd2.is_deleted    = 0
             )
       WHERE o.id = ?
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
                o.payment_id, o.status, o.caretaker_id, o.assigned_caretaker_id,
+               o.otp, o.otp_verified, o.otp_verified_at,
+               o.caretaker_latitude, o.caretaker_longitude,
                u.first_name, u.mobile
     `, [req.params.id]);
 
@@ -50,7 +58,7 @@ router.get("/order-detail/:id", async (req, res) => {
 router.get("/orders", async (req, res) => {
   try {
     const [orders] = await db.query(`
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.status, o.caretaker_id,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
@@ -58,7 +66,7 @@ router.get("/orders", async (req, res) => {
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.status = 'CONFIRMED' AND o.caretaker_id IS NULL
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
                o.status, o.caretaker_id
       ORDER BY o.created_at ASC
@@ -74,7 +82,7 @@ router.get("/orders", async (req, res) => {
 router.get("/orders/:category", async (req, res) => {
   try {
     const [orders] = await db.query(`
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.total, o.payment_method, o.payment_status,
              o.status, o.caretaker_id,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
@@ -82,7 +90,7 @@ router.get("/orders/:category", async (req, res) => {
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.status = 'CONFIRMED' AND o.caretaker_id IS NULL AND o.category = ?
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.total, o.payment_method, o.payment_status,
                o.status, o.caretaker_id
       ORDER BY o.created_at ASC
@@ -100,6 +108,24 @@ router.post("/accept", async (req, res) => {
     const { order_id, caretaker_id } = req.body;
     if (!order_id || !caretaker_id)
       return res.status(400).json({ success: false, message: "Missing order_id or caretaker_id" });
+
+    const [[targetOrder]] = await db.query(
+      `SELECT id, date, slot, category, status FROM orders WHERE id = ?`,
+      [order_id]
+    );
+    if (!targetOrder)
+      return res.json({ success: false, message: "Order not found" });
+
+    // Slot conflict check — caretaker can't hold two active bookings at the same time
+    const [[slotConflict]] = await db.query(
+      `SELECT id FROM orders
+       WHERE caretaker_id = ? AND date = ? AND slot = ?
+         AND status IN ('ACCEPTED', 'ON_THE_WAY')
+       LIMIT 1`,
+      [caretaker_id, targetOrder.date, targetOrder.slot]
+    );
+    if (slotConflict)
+      return res.json({ success: false, message: "You already accepted another booking for this slot" });
 
     const [result] = await db.query(`
       UPDATE orders o
@@ -133,6 +159,51 @@ router.post("/accept", async (req, res) => {
   }
 });
 
+/* ═══════════════════════════════════════════════════════════
+   POST /caretaker/cancel
+═══════════════════════════════════════════════════════════ */
+router.post("/cancel", async (req, res) => {
+  try {
+    const { order_id, caretaker_id, cancel_reason } = req.body;
+    if (!order_id || !caretaker_id)
+      return res.status(400).json({ success: false, message: "Missing order_id or caretaker_id" });
+
+    const [[order]] = await db.query(`SELECT * FROM orders WHERE id = ?`, [order_id]);
+    if (!order) return res.json({ success: false, message: "Order not found" });
+    if (Number(order.caretaker_id) !== Number(caretaker_id))
+      return res.json({ success: false, message: "Unauthorized" });
+    if (order.status === "COMPLETED")
+      return res.json({ success: false, message: "Completed order cannot be cancelled" });
+
+    const isOnlinePaid = order.payment_method !== "COD" && order.payment_status === "PAID";
+
+    if (isOnlinePaid) {
+      await db.query(
+        `UPDATE orders SET status='CARETAKER_CANCELLED', cancel_reason=?, cancelled_at=NOW() WHERE id=?`,
+        [cancel_reason || "Cancelled by caretaker", order_id]
+      );
+    } else {
+      await db.query(
+        `UPDATE orders
+         SET caretaker_id=NULL, assigned_caretaker_id=NULL, status='CONFIRMED',
+             accepted_at=NULL, cancel_reason=?, cancelled_at=NOW()
+         WHERE id=?`,
+        [cancel_reason || "Cancelled by caretaker", order_id]
+      );
+    }
+
+    res.json({
+      success: true,
+      message: isOnlinePaid
+        ? "Paid booking flagged for admin reassignment"
+        : "Booking cancelled and reopened successfully",
+    });
+  } catch (err) {
+    console.error("CANCEL ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 /* POST /caretaker/mark-payment-received */
 router.post("/mark-payment-received", async (req, res) => {
   try {
@@ -149,8 +220,11 @@ router.post("/mark-payment-received", async (req, res) => {
     if (Number(order.caretaker_id) !== Number(caretaker_id))
                        return res.json({ success: false, message: "Unauthorized" });
 
+    // ✅ FIXED — no longer overwrites status. Payment and journey status
+    // are independent; forcing status here used to fight with /start
+    // and /complete over which status the order should be in.
     await db.query(
-      "UPDATE orders SET payment_status='PAID', status='IN_PROGRESS' WHERE id=?", [order_id]);
+      "UPDATE orders SET payment_status='PAID' WHERE id=?", [order_id]);
 
     const [[ord]] = await db.query(`
       SELECT o.order_code, o.category, u.fcm_token
@@ -168,7 +242,60 @@ router.post("/mark-payment-received", async (req, res) => {
   }
 });
 
-/* POST /caretaker/start */
+/* ═══════════════════════════════════════════════════════════
+   PUT /caretaker/profile/availability/:id
+═══════════════════════════════════════════════════════════ */
+router.put("/profile/availability/:id", async (req, res) => {
+  const { id } = req.params;
+  const { is_available } = req.body;
+
+  try {
+    const [[profile]] = await db.query(
+      "SELECT availability_locked FROM caretaker_profiles WHERE user_id = ?",
+      [id]
+    );
+    if (!profile)
+      return res.status(404).json({ success: false, message: "Profile not found" });
+
+    if (profile.availability_locked === 1) {
+      return res.status(403).json({
+        success: false,
+        message: "Your availability is locked by admin. Contact admin to reactivate.",
+        locked: true,
+      });
+    }
+
+    const newVal = Number(is_available) === 1 ? 1 : 0;
+    const tsCol  = newVal ? "last_available_at" : "last_unavailable_at";
+
+    await db.query(
+      `UPDATE caretaker_profiles SET is_available = ?, ${tsCol} = NOW() WHERE user_id = ?`,
+      [newVal, id]
+    );
+
+    await db.query(
+      `INSERT INTO caregiver_daily_status (caregiver_id, status_date, is_available)
+       VALUES (?, CURDATE(), ?)
+       ON DUPLICATE KEY UPDATE is_available = VALUES(is_available)`,
+      [id, newVal]
+    );
+
+    res.json({ success: true, message: newVal ? "You are now available" : "You are now unavailable" });
+  } catch (err) {
+    console.error("TOGGLE AVAILABILITY ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   POST /caretaker/start
+   ✅ FIXED — sets 'ON_THE_WAY' (was 'IN_PROGRESS', which never
+      matched the Flutter app's status checks, so tracking never
+      showed up and the "On The Way" step never activated).
+   ✅ FIXED — no longer requires payment_status='PAID'. COD orders
+      pay AFTER service, so requiring payment upfront blocked every
+      COD caretaker from ever starting the journey.
+═══════════════════════════════════════════════════════════ */
 router.post("/start", async (req, res) => {
   try {
     const { order_id, caretaker_id } = req.body;
@@ -176,14 +303,13 @@ router.post("/start", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing order_id or caretaker_id" });
 
     const [result] = await db.query(`
-      UPDATE orders SET status='IN_PROGRESS'
+      UPDATE orders SET status='ON_THE_WAY'
       WHERE id=? AND caretaker_id=?
         AND status IN ('ACCEPTED','CONFIRMED')
-        AND payment_status='PAID'
     `, [order_id, caretaker_id]);
 
     if (result.affectedRows === 0)
-      return res.json({ success: false, message: "Not found, not accepted, or payment not completed" });
+      return res.json({ success: false, message: "Order not found, not accepted, or already started" });
 
     const [[order]] = await db.query(`
       SELECT o.order_code, o.category, u.fcm_token
@@ -191,17 +317,97 @@ router.post("/start", async (req, res) => {
     `, [order_id]);
 
     if (order?.fcm_token)
-      sendPushNotification(order.fcm_token, "Service Started 🚀",
-        `Your ${order.category} service (${order.order_code}) has started.`);
+      sendPushNotification(order.fcm_token, "Caretaker On The Way 🚗",
+        `Your caretaker for ${order.category} service (${order.order_code}) is on the way.`);
 
-    res.json({ success: true, message: "Service started" });
+    res.json({ success: true, message: "Caretaker journey started successfully" });
   } catch (err) {
     console.error("START ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/* POST /caretaker/complete */
+/* ═══════════════════════════════════════════════════════════
+   POST /caretaker/update-location
+   ✅ ADDED — this route was completely missing from this file,
+      so every location ping from _startLiveTracking() was 404ing
+      silently and the careseeker's live map never got coordinates.
+═══════════════════════════════════════════════════════════ */
+router.post("/update-location", async (req, res) => {
+  try {
+    const { order_id, caretaker_id, latitude, longitude } = req.body;
+
+    if (!order_id || !caretaker_id || latitude == null || longitude == null) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const [result] = await db.query(
+      `UPDATE orders
+       SET caretaker_latitude = ?, caretaker_longitude = ?
+       WHERE id = ? AND caretaker_id = ? AND status = 'ON_THE_WAY'`,
+      [latitude, longitude, order_id, caretaker_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Order not active" });
+    }
+
+    res.json({ success: true, message: "Location updated" });
+  } catch (err) {
+    console.error("UPDATE LOCATION ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   POST /caretaker/verify-otp
+   ✅ ADDED — this route was completely missing from this file,
+      so CaretakerOtpScreen's verify call always 404'd and
+      otp_verified could never flip to 1.
+═══════════════════════════════════════════════════════════ */
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { order_id, caretaker_id, otp } = req.body;
+
+    if (!order_id || !caretaker_id || !otp) {
+      return res.status(400).json({ success: false, message: "Missing order_id, caretaker_id or otp" });
+    }
+
+    const [[order]] = await db.query(
+      `SELECT id, otp, otp_verified, status, caretaker_id FROM orders WHERE id = ?`,
+      [order_id]
+    );
+
+    if (!order) return res.json({ success: false, message: "Order not found" });
+    if (Number(order.caretaker_id) !== Number(caretaker_id))
+      return res.json({ success: false, message: "Unauthorized" });
+    if (order.status !== "ON_THE_WAY")
+      return res.json({ success: false, message: `Cannot verify OTP — order is ${order.status}` });
+    if (order.otp_verified === 1)
+      return res.json({ success: true, message: "OTP already verified" });
+    if (!order.otp || String(order.otp) !== String(otp))
+      return res.json({ success: false, message: "Invalid OTP" });
+
+    await db.query(
+      `UPDATE orders SET otp_verified = 1, otp_verified_at = NOW() WHERE id = ?`,
+      [order_id]
+    );
+
+    res.json({ success: true, message: "OTP verified successfully" });
+  } catch (err) {
+    console.error("VERIFY OTP ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   POST /caretaker/complete
+   ✅ FIXED — status check now uses 'ON_THE_WAY' (was matching
+      'IN_PROGRESS', which is never actually set anymore).
+   ✅ FIXED — now requires otp_verified = 1, consistent with the
+      Flutter CTA logic (_ctaAction only offers "Complete Service"
+      after OTP verification + payment).
+═══════════════════════════════════════════════════════════ */
 router.post("/complete", async (req, res) => {
   const connection = await db.getConnection();
   try {
@@ -226,13 +432,17 @@ router.post("/complete", async (req, res) => {
       await connection.commit();
       return res.json({ success: true, message: "Already completed" });
     }
-    if (!["ACCEPTED", "CONFIRMED", "IN_PROGRESS"].includes(order.status)) {
+    if (order.status !== "ON_THE_WAY") {
       await connection.rollback();
       return res.json({ success: false, message: `Cannot complete — order is ${order.status}` });
     }
     if (Number(order.caretaker_id) !== Number(caretaker_id)) {
       await connection.rollback();
       return res.json({ success: false, message: "Unauthorized" });
+    }
+    if (order.otp_verified !== 1) {
+      await connection.rollback();
+      return res.json({ success: false, message: "Please verify arrival OTP before completing" });
     }
 
     const [[existing]] = await connection.query(
@@ -281,14 +491,14 @@ router.post("/complete", async (req, res) => {
 router.get("/my-jobs/:caretakerId", async (req, res) => {
   try {
     const [jobs] = await db.query(`
-      SELECT o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      SELECT o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
              o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method,
              GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS services
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN services s     ON s.id        = oi.service_id
       WHERE o.caretaker_id=? AND o.status != 'CANCELLED'
-      GROUP BY o.id, o.order_code, o.category, o.location, o.latitude, o.longitude,
+      GROUP BY o.id, o.user_id, o.order_code, o.category, o.location, o.latitude, o.longitude,
                o.date, o.slot, o.status, o.payment_status, o.total, o.payment_method
       ORDER BY o.created_at DESC
     `, [req.params.caretakerId]);
